@@ -278,6 +278,11 @@ func (tb *tracedBatch) Rows() int {
 	return tb.batch.Rows()
 }
 
+// Close delegates to the underlying batch
+func (tb *tracedBatch) Close() error {
+	return tb.batch.Close()
+}
+
 // Truncate query to avoid sending too much data to Sentry
 func truncateQuery(query string) string {
 	const maxQueryLength = 1000
