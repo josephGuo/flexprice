@@ -102,6 +102,9 @@ const (
 )
 
 func (t WalletTxReferenceType) Validate() error {
+	if t == "" {
+		return nil
+	}
 	allowedValues := []string{
 		string(WalletTxReferenceTypePayment),
 		string(WalletTxReferenceTypeExternal),
@@ -159,6 +162,11 @@ func (t AutoTopupTrigger) String() string {
 type WalletTransactionFilter struct {
 	*QueryFilter
 	*TimeRangeFilter
+
+	// filters allows complex filtering based on multiple fields
+	Filters []*FilterCondition `json:"filters,omitempty" form:"filters" validate:"omitempty"`
+	Sort    []*SortCondition   `json:"sort,omitempty" form:"sort" validate:"omitempty"`
+
 	WalletID           *string            `json:"id,omitempty" form:"id"`
 	Type               *TransactionType   `json:"type,omitempty" form:"type"`
 	TransactionStatus  *TransactionStatus `json:"transaction_status,omitempty" form:"transaction_status"`
@@ -169,6 +177,7 @@ type WalletTransactionFilter struct {
 	CreditsAvailableGT *decimal.Decimal   `json:"credits_available_gt,omitempty" form:"credits_available_gt"`
 	TransactionReason  *TransactionReason `json:"transaction_reason,omitempty" form:"transaction_reason"`
 	Priority           *int               `json:"priority,omitempty" form:"priority"`
+	CreatedBy          *string            `json:"created_by,omitempty" form:"created_by"`
 }
 
 func NewWalletTransactionFilter() *WalletTransactionFilter {
@@ -221,8 +230,6 @@ func (f WalletTransactionFilter) Validate() error {
 				Mark(ierr.ErrValidation)
 		}
 	}
-
-	// TODO: Add validation for transaction reason if needed
 
 	return nil
 }
