@@ -2820,8 +2820,8 @@ func testCreatePrice(ctx context.Context, client *flexprice.APIClient) {
 	}
 
 	priceRequest := flexprice.DtoCreatePriceRequest{
-		EntityId:       testPlanID,
-		EntityType:     flexprice.TYPESPRICEENTITYTYPE_PRICE_ENTITY_TYPE_PLAN,
+		EntityId:       &testPlanID,
+		EntityType:     flexprice.TYPESPRICEENTITYTYPE_PRICE_ENTITY_TYPE_PLAN.Ptr(),
 		Currency:       "USD",
 		Amount:         lo.ToPtr("99.00"),
 		BillingModel:   flexprice.TYPESBILLINGMODEL_BILLING_MODEL_FLAT_FEE,
@@ -2830,8 +2830,8 @@ func testCreatePrice(ctx context.Context, client *flexprice.APIClient) {
 		InvoiceCadence: flexprice.TYPESINVOICECADENCE_InvoiceCadenceAdvance,
 		PriceUnitType:  flexprice.TYPESPRICEUNITTYPE_PRICE_UNIT_TYPE_FIAT,
 		Type:           flexprice.TYPESPRICETYPE_PRICE_TYPE_FIXED,
-		DisplayName:    lo.ToPtr("Monthly Subscription"),
-		Description:    lo.ToPtr("Standard monthly subscription price"),
+		//DisplayName:    lo.ToPtr("Monthly Subscription"),
+		Description: lo.ToPtr("Standard monthly subscription price"),
 	}
 
 	price, response, err := client.PricesAPI.PricesPost(ctx).
