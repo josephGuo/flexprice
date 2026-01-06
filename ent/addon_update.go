@@ -24,161 +24,161 @@ type AddonUpdate struct {
 }
 
 // Where appends a list predicates to the AddonUpdate builder.
-func (au *AddonUpdate) Where(ps ...predicate.Addon) *AddonUpdate {
-	au.mutation.Where(ps...)
-	return au
+func (_u *AddonUpdate) Where(ps ...predicate.Addon) *AddonUpdate {
+	_u.mutation.Where(ps...)
+	return _u
 }
 
 // SetStatus sets the "status" field.
-func (au *AddonUpdate) SetStatus(s string) *AddonUpdate {
-	au.mutation.SetStatus(s)
-	return au
+func (_u *AddonUpdate) SetStatus(v string) *AddonUpdate {
+	_u.mutation.SetStatus(v)
+	return _u
 }
 
 // SetNillableStatus sets the "status" field if the given value is not nil.
-func (au *AddonUpdate) SetNillableStatus(s *string) *AddonUpdate {
-	if s != nil {
-		au.SetStatus(*s)
+func (_u *AddonUpdate) SetNillableStatus(v *string) *AddonUpdate {
+	if v != nil {
+		_u.SetStatus(*v)
 	}
-	return au
+	return _u
 }
 
 // SetUpdatedAt sets the "updated_at" field.
-func (au *AddonUpdate) SetUpdatedAt(t time.Time) *AddonUpdate {
-	au.mutation.SetUpdatedAt(t)
-	return au
+func (_u *AddonUpdate) SetUpdatedAt(v time.Time) *AddonUpdate {
+	_u.mutation.SetUpdatedAt(v)
+	return _u
 }
 
 // SetUpdatedBy sets the "updated_by" field.
-func (au *AddonUpdate) SetUpdatedBy(s string) *AddonUpdate {
-	au.mutation.SetUpdatedBy(s)
-	return au
+func (_u *AddonUpdate) SetUpdatedBy(v string) *AddonUpdate {
+	_u.mutation.SetUpdatedBy(v)
+	return _u
 }
 
 // SetNillableUpdatedBy sets the "updated_by" field if the given value is not nil.
-func (au *AddonUpdate) SetNillableUpdatedBy(s *string) *AddonUpdate {
-	if s != nil {
-		au.SetUpdatedBy(*s)
+func (_u *AddonUpdate) SetNillableUpdatedBy(v *string) *AddonUpdate {
+	if v != nil {
+		_u.SetUpdatedBy(*v)
 	}
-	return au
+	return _u
 }
 
 // ClearUpdatedBy clears the value of the "updated_by" field.
-func (au *AddonUpdate) ClearUpdatedBy() *AddonUpdate {
-	au.mutation.ClearUpdatedBy()
-	return au
+func (_u *AddonUpdate) ClearUpdatedBy() *AddonUpdate {
+	_u.mutation.ClearUpdatedBy()
+	return _u
 }
 
 // SetName sets the "name" field.
-func (au *AddonUpdate) SetName(s string) *AddonUpdate {
-	au.mutation.SetName(s)
-	return au
+func (_u *AddonUpdate) SetName(v string) *AddonUpdate {
+	_u.mutation.SetName(v)
+	return _u
 }
 
 // SetNillableName sets the "name" field if the given value is not nil.
-func (au *AddonUpdate) SetNillableName(s *string) *AddonUpdate {
-	if s != nil {
-		au.SetName(*s)
+func (_u *AddonUpdate) SetNillableName(v *string) *AddonUpdate {
+	if v != nil {
+		_u.SetName(*v)
 	}
-	return au
+	return _u
 }
 
 // SetDescription sets the "description" field.
-func (au *AddonUpdate) SetDescription(s string) *AddonUpdate {
-	au.mutation.SetDescription(s)
-	return au
+func (_u *AddonUpdate) SetDescription(v string) *AddonUpdate {
+	_u.mutation.SetDescription(v)
+	return _u
 }
 
 // SetNillableDescription sets the "description" field if the given value is not nil.
-func (au *AddonUpdate) SetNillableDescription(s *string) *AddonUpdate {
-	if s != nil {
-		au.SetDescription(*s)
+func (_u *AddonUpdate) SetNillableDescription(v *string) *AddonUpdate {
+	if v != nil {
+		_u.SetDescription(*v)
 	}
-	return au
+	return _u
 }
 
 // ClearDescription clears the value of the "description" field.
-func (au *AddonUpdate) ClearDescription() *AddonUpdate {
-	au.mutation.ClearDescription()
-	return au
+func (_u *AddonUpdate) ClearDescription() *AddonUpdate {
+	_u.mutation.ClearDescription()
+	return _u
 }
 
 // SetType sets the "type" field.
-func (au *AddonUpdate) SetType(s string) *AddonUpdate {
-	au.mutation.SetType(s)
-	return au
+func (_u *AddonUpdate) SetType(v string) *AddonUpdate {
+	_u.mutation.SetType(v)
+	return _u
 }
 
 // SetNillableType sets the "type" field if the given value is not nil.
-func (au *AddonUpdate) SetNillableType(s *string) *AddonUpdate {
-	if s != nil {
-		au.SetType(*s)
+func (_u *AddonUpdate) SetNillableType(v *string) *AddonUpdate {
+	if v != nil {
+		_u.SetType(*v)
 	}
-	return au
+	return _u
 }
 
 // SetMetadata sets the "metadata" field.
-func (au *AddonUpdate) SetMetadata(m map[string]interface{}) *AddonUpdate {
-	au.mutation.SetMetadata(m)
-	return au
+func (_u *AddonUpdate) SetMetadata(v map[string]interface{}) *AddonUpdate {
+	_u.mutation.SetMetadata(v)
+	return _u
 }
 
 // ClearMetadata clears the value of the "metadata" field.
-func (au *AddonUpdate) ClearMetadata() *AddonUpdate {
-	au.mutation.ClearMetadata()
-	return au
+func (_u *AddonUpdate) ClearMetadata() *AddonUpdate {
+	_u.mutation.ClearMetadata()
+	return _u
 }
 
 // AddEntitlementIDs adds the "entitlements" edge to the Entitlement entity by IDs.
-func (au *AddonUpdate) AddEntitlementIDs(ids ...string) *AddonUpdate {
-	au.mutation.AddEntitlementIDs(ids...)
-	return au
+func (_u *AddonUpdate) AddEntitlementIDs(ids ...string) *AddonUpdate {
+	_u.mutation.AddEntitlementIDs(ids...)
+	return _u
 }
 
 // AddEntitlements adds the "entitlements" edges to the Entitlement entity.
-func (au *AddonUpdate) AddEntitlements(e ...*Entitlement) *AddonUpdate {
-	ids := make([]string, len(e))
-	for i := range e {
-		ids[i] = e[i].ID
+func (_u *AddonUpdate) AddEntitlements(v ...*Entitlement) *AddonUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
 	}
-	return au.AddEntitlementIDs(ids...)
+	return _u.AddEntitlementIDs(ids...)
 }
 
 // Mutation returns the AddonMutation object of the builder.
-func (au *AddonUpdate) Mutation() *AddonMutation {
-	return au.mutation
+func (_u *AddonUpdate) Mutation() *AddonMutation {
+	return _u.mutation
 }
 
 // ClearEntitlements clears all "entitlements" edges to the Entitlement entity.
-func (au *AddonUpdate) ClearEntitlements() *AddonUpdate {
-	au.mutation.ClearEntitlements()
-	return au
+func (_u *AddonUpdate) ClearEntitlements() *AddonUpdate {
+	_u.mutation.ClearEntitlements()
+	return _u
 }
 
 // RemoveEntitlementIDs removes the "entitlements" edge to Entitlement entities by IDs.
-func (au *AddonUpdate) RemoveEntitlementIDs(ids ...string) *AddonUpdate {
-	au.mutation.RemoveEntitlementIDs(ids...)
-	return au
+func (_u *AddonUpdate) RemoveEntitlementIDs(ids ...string) *AddonUpdate {
+	_u.mutation.RemoveEntitlementIDs(ids...)
+	return _u
 }
 
 // RemoveEntitlements removes "entitlements" edges to Entitlement entities.
-func (au *AddonUpdate) RemoveEntitlements(e ...*Entitlement) *AddonUpdate {
-	ids := make([]string, len(e))
-	for i := range e {
-		ids[i] = e[i].ID
+func (_u *AddonUpdate) RemoveEntitlements(v ...*Entitlement) *AddonUpdate {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
 	}
-	return au.RemoveEntitlementIDs(ids...)
+	return _u.RemoveEntitlementIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
-func (au *AddonUpdate) Save(ctx context.Context) (int, error) {
-	au.defaults()
-	return withHooks(ctx, au.sqlSave, au.mutation, au.hooks)
+func (_u *AddonUpdate) Save(ctx context.Context) (int, error) {
+	_u.defaults()
+	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
 // SaveX is like Save, but panics if an error occurs.
-func (au *AddonUpdate) SaveX(ctx context.Context) int {
-	affected, err := au.Save(ctx)
+func (_u *AddonUpdate) SaveX(ctx context.Context) int {
+	affected, err := _u.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -186,34 +186,34 @@ func (au *AddonUpdate) SaveX(ctx context.Context) int {
 }
 
 // Exec executes the query.
-func (au *AddonUpdate) Exec(ctx context.Context) error {
-	_, err := au.Save(ctx)
+func (_u *AddonUpdate) Exec(ctx context.Context) error {
+	_, err := _u.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (au *AddonUpdate) ExecX(ctx context.Context) {
-	if err := au.Exec(ctx); err != nil {
+func (_u *AddonUpdate) ExecX(ctx context.Context) {
+	if err := _u.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
 
 // defaults sets the default values of the builder before save.
-func (au *AddonUpdate) defaults() {
-	if _, ok := au.mutation.UpdatedAt(); !ok {
+func (_u *AddonUpdate) defaults() {
+	if _, ok := _u.mutation.UpdatedAt(); !ok {
 		v := addon.UpdateDefaultUpdatedAt()
-		au.mutation.SetUpdatedAt(v)
+		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
 // check runs all checks and user-defined validators on the builder.
-func (au *AddonUpdate) check() error {
-	if v, ok := au.mutation.Name(); ok {
+func (_u *AddonUpdate) check() error {
+	if v, ok := _u.mutation.Name(); ok {
 		if err := addon.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "Addon.name": %w`, err)}
 		}
 	}
-	if v, ok := au.mutation.GetType(); ok {
+	if v, ok := _u.mutation.GetType(); ok {
 		if err := addon.TypeValidator(v); err != nil {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Addon.type": %w`, err)}
 		}
@@ -221,55 +221,55 @@ func (au *AddonUpdate) check() error {
 	return nil
 }
 
-func (au *AddonUpdate) sqlSave(ctx context.Context) (n int, err error) {
-	if err := au.check(); err != nil {
-		return n, err
+func (_u *AddonUpdate) sqlSave(ctx context.Context) (_node int, err error) {
+	if err := _u.check(); err != nil {
+		return _node, err
 	}
 	_spec := sqlgraph.NewUpdateSpec(addon.Table, addon.Columns, sqlgraph.NewFieldSpec(addon.FieldID, field.TypeString))
-	if ps := au.mutation.predicates; len(ps) > 0 {
+	if ps := _u.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
 			}
 		}
 	}
-	if value, ok := au.mutation.Status(); ok {
+	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(addon.FieldStatus, field.TypeString, value)
 	}
-	if value, ok := au.mutation.UpdatedAt(); ok {
+	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(addon.FieldUpdatedAt, field.TypeTime, value)
 	}
-	if au.mutation.CreatedByCleared() {
+	if _u.mutation.CreatedByCleared() {
 		_spec.ClearField(addon.FieldCreatedBy, field.TypeString)
 	}
-	if value, ok := au.mutation.UpdatedBy(); ok {
+	if value, ok := _u.mutation.UpdatedBy(); ok {
 		_spec.SetField(addon.FieldUpdatedBy, field.TypeString, value)
 	}
-	if au.mutation.UpdatedByCleared() {
+	if _u.mutation.UpdatedByCleared() {
 		_spec.ClearField(addon.FieldUpdatedBy, field.TypeString)
 	}
-	if au.mutation.EnvironmentIDCleared() {
+	if _u.mutation.EnvironmentIDCleared() {
 		_spec.ClearField(addon.FieldEnvironmentID, field.TypeString)
 	}
-	if value, ok := au.mutation.Name(); ok {
+	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(addon.FieldName, field.TypeString, value)
 	}
-	if value, ok := au.mutation.Description(); ok {
+	if value, ok := _u.mutation.Description(); ok {
 		_spec.SetField(addon.FieldDescription, field.TypeString, value)
 	}
-	if au.mutation.DescriptionCleared() {
+	if _u.mutation.DescriptionCleared() {
 		_spec.ClearField(addon.FieldDescription, field.TypeString)
 	}
-	if value, ok := au.mutation.GetType(); ok {
+	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(addon.FieldType, field.TypeString, value)
 	}
-	if value, ok := au.mutation.Metadata(); ok {
+	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(addon.FieldMetadata, field.TypeJSON, value)
 	}
-	if au.mutation.MetadataCleared() {
+	if _u.mutation.MetadataCleared() {
 		_spec.ClearField(addon.FieldMetadata, field.TypeJSON)
 	}
-	if au.mutation.EntitlementsCleared() {
+	if _u.mutation.EntitlementsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -282,7 +282,7 @@ func (au *AddonUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
-	if nodes := au.mutation.RemovedEntitlementsIDs(); len(nodes) > 0 && !au.mutation.EntitlementsCleared() {
+	if nodes := _u.mutation.RemovedEntitlementsIDs(); len(nodes) > 0 && !_u.mutation.EntitlementsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -298,7 +298,7 @@ func (au *AddonUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
-	if nodes := au.mutation.EntitlementsIDs(); len(nodes) > 0 {
+	if nodes := _u.mutation.EntitlementsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -314,7 +314,7 @@ func (au *AddonUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
-	if n, err = sqlgraph.UpdateNodes(ctx, au.driver, _spec); err != nil {
+	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{addon.Label}
 		} else if sqlgraph.IsConstraintError(err) {
@@ -322,8 +322,8 @@ func (au *AddonUpdate) sqlSave(ctx context.Context) (n int, err error) {
 		}
 		return 0, err
 	}
-	au.mutation.done = true
-	return n, nil
+	_u.mutation.done = true
+	return _node, nil
 }
 
 // AddonUpdateOne is the builder for updating a single Addon entity.
@@ -335,168 +335,168 @@ type AddonUpdateOne struct {
 }
 
 // SetStatus sets the "status" field.
-func (auo *AddonUpdateOne) SetStatus(s string) *AddonUpdateOne {
-	auo.mutation.SetStatus(s)
-	return auo
+func (_u *AddonUpdateOne) SetStatus(v string) *AddonUpdateOne {
+	_u.mutation.SetStatus(v)
+	return _u
 }
 
 // SetNillableStatus sets the "status" field if the given value is not nil.
-func (auo *AddonUpdateOne) SetNillableStatus(s *string) *AddonUpdateOne {
-	if s != nil {
-		auo.SetStatus(*s)
+func (_u *AddonUpdateOne) SetNillableStatus(v *string) *AddonUpdateOne {
+	if v != nil {
+		_u.SetStatus(*v)
 	}
-	return auo
+	return _u
 }
 
 // SetUpdatedAt sets the "updated_at" field.
-func (auo *AddonUpdateOne) SetUpdatedAt(t time.Time) *AddonUpdateOne {
-	auo.mutation.SetUpdatedAt(t)
-	return auo
+func (_u *AddonUpdateOne) SetUpdatedAt(v time.Time) *AddonUpdateOne {
+	_u.mutation.SetUpdatedAt(v)
+	return _u
 }
 
 // SetUpdatedBy sets the "updated_by" field.
-func (auo *AddonUpdateOne) SetUpdatedBy(s string) *AddonUpdateOne {
-	auo.mutation.SetUpdatedBy(s)
-	return auo
+func (_u *AddonUpdateOne) SetUpdatedBy(v string) *AddonUpdateOne {
+	_u.mutation.SetUpdatedBy(v)
+	return _u
 }
 
 // SetNillableUpdatedBy sets the "updated_by" field if the given value is not nil.
-func (auo *AddonUpdateOne) SetNillableUpdatedBy(s *string) *AddonUpdateOne {
-	if s != nil {
-		auo.SetUpdatedBy(*s)
+func (_u *AddonUpdateOne) SetNillableUpdatedBy(v *string) *AddonUpdateOne {
+	if v != nil {
+		_u.SetUpdatedBy(*v)
 	}
-	return auo
+	return _u
 }
 
 // ClearUpdatedBy clears the value of the "updated_by" field.
-func (auo *AddonUpdateOne) ClearUpdatedBy() *AddonUpdateOne {
-	auo.mutation.ClearUpdatedBy()
-	return auo
+func (_u *AddonUpdateOne) ClearUpdatedBy() *AddonUpdateOne {
+	_u.mutation.ClearUpdatedBy()
+	return _u
 }
 
 // SetName sets the "name" field.
-func (auo *AddonUpdateOne) SetName(s string) *AddonUpdateOne {
-	auo.mutation.SetName(s)
-	return auo
+func (_u *AddonUpdateOne) SetName(v string) *AddonUpdateOne {
+	_u.mutation.SetName(v)
+	return _u
 }
 
 // SetNillableName sets the "name" field if the given value is not nil.
-func (auo *AddonUpdateOne) SetNillableName(s *string) *AddonUpdateOne {
-	if s != nil {
-		auo.SetName(*s)
+func (_u *AddonUpdateOne) SetNillableName(v *string) *AddonUpdateOne {
+	if v != nil {
+		_u.SetName(*v)
 	}
-	return auo
+	return _u
 }
 
 // SetDescription sets the "description" field.
-func (auo *AddonUpdateOne) SetDescription(s string) *AddonUpdateOne {
-	auo.mutation.SetDescription(s)
-	return auo
+func (_u *AddonUpdateOne) SetDescription(v string) *AddonUpdateOne {
+	_u.mutation.SetDescription(v)
+	return _u
 }
 
 // SetNillableDescription sets the "description" field if the given value is not nil.
-func (auo *AddonUpdateOne) SetNillableDescription(s *string) *AddonUpdateOne {
-	if s != nil {
-		auo.SetDescription(*s)
+func (_u *AddonUpdateOne) SetNillableDescription(v *string) *AddonUpdateOne {
+	if v != nil {
+		_u.SetDescription(*v)
 	}
-	return auo
+	return _u
 }
 
 // ClearDescription clears the value of the "description" field.
-func (auo *AddonUpdateOne) ClearDescription() *AddonUpdateOne {
-	auo.mutation.ClearDescription()
-	return auo
+func (_u *AddonUpdateOne) ClearDescription() *AddonUpdateOne {
+	_u.mutation.ClearDescription()
+	return _u
 }
 
 // SetType sets the "type" field.
-func (auo *AddonUpdateOne) SetType(s string) *AddonUpdateOne {
-	auo.mutation.SetType(s)
-	return auo
+func (_u *AddonUpdateOne) SetType(v string) *AddonUpdateOne {
+	_u.mutation.SetType(v)
+	return _u
 }
 
 // SetNillableType sets the "type" field if the given value is not nil.
-func (auo *AddonUpdateOne) SetNillableType(s *string) *AddonUpdateOne {
-	if s != nil {
-		auo.SetType(*s)
+func (_u *AddonUpdateOne) SetNillableType(v *string) *AddonUpdateOne {
+	if v != nil {
+		_u.SetType(*v)
 	}
-	return auo
+	return _u
 }
 
 // SetMetadata sets the "metadata" field.
-func (auo *AddonUpdateOne) SetMetadata(m map[string]interface{}) *AddonUpdateOne {
-	auo.mutation.SetMetadata(m)
-	return auo
+func (_u *AddonUpdateOne) SetMetadata(v map[string]interface{}) *AddonUpdateOne {
+	_u.mutation.SetMetadata(v)
+	return _u
 }
 
 // ClearMetadata clears the value of the "metadata" field.
-func (auo *AddonUpdateOne) ClearMetadata() *AddonUpdateOne {
-	auo.mutation.ClearMetadata()
-	return auo
+func (_u *AddonUpdateOne) ClearMetadata() *AddonUpdateOne {
+	_u.mutation.ClearMetadata()
+	return _u
 }
 
 // AddEntitlementIDs adds the "entitlements" edge to the Entitlement entity by IDs.
-func (auo *AddonUpdateOne) AddEntitlementIDs(ids ...string) *AddonUpdateOne {
-	auo.mutation.AddEntitlementIDs(ids...)
-	return auo
+func (_u *AddonUpdateOne) AddEntitlementIDs(ids ...string) *AddonUpdateOne {
+	_u.mutation.AddEntitlementIDs(ids...)
+	return _u
 }
 
 // AddEntitlements adds the "entitlements" edges to the Entitlement entity.
-func (auo *AddonUpdateOne) AddEntitlements(e ...*Entitlement) *AddonUpdateOne {
-	ids := make([]string, len(e))
-	for i := range e {
-		ids[i] = e[i].ID
+func (_u *AddonUpdateOne) AddEntitlements(v ...*Entitlement) *AddonUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
 	}
-	return auo.AddEntitlementIDs(ids...)
+	return _u.AddEntitlementIDs(ids...)
 }
 
 // Mutation returns the AddonMutation object of the builder.
-func (auo *AddonUpdateOne) Mutation() *AddonMutation {
-	return auo.mutation
+func (_u *AddonUpdateOne) Mutation() *AddonMutation {
+	return _u.mutation
 }
 
 // ClearEntitlements clears all "entitlements" edges to the Entitlement entity.
-func (auo *AddonUpdateOne) ClearEntitlements() *AddonUpdateOne {
-	auo.mutation.ClearEntitlements()
-	return auo
+func (_u *AddonUpdateOne) ClearEntitlements() *AddonUpdateOne {
+	_u.mutation.ClearEntitlements()
+	return _u
 }
 
 // RemoveEntitlementIDs removes the "entitlements" edge to Entitlement entities by IDs.
-func (auo *AddonUpdateOne) RemoveEntitlementIDs(ids ...string) *AddonUpdateOne {
-	auo.mutation.RemoveEntitlementIDs(ids...)
-	return auo
+func (_u *AddonUpdateOne) RemoveEntitlementIDs(ids ...string) *AddonUpdateOne {
+	_u.mutation.RemoveEntitlementIDs(ids...)
+	return _u
 }
 
 // RemoveEntitlements removes "entitlements" edges to Entitlement entities.
-func (auo *AddonUpdateOne) RemoveEntitlements(e ...*Entitlement) *AddonUpdateOne {
-	ids := make([]string, len(e))
-	for i := range e {
-		ids[i] = e[i].ID
+func (_u *AddonUpdateOne) RemoveEntitlements(v ...*Entitlement) *AddonUpdateOne {
+	ids := make([]string, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
 	}
-	return auo.RemoveEntitlementIDs(ids...)
+	return _u.RemoveEntitlementIDs(ids...)
 }
 
 // Where appends a list predicates to the AddonUpdate builder.
-func (auo *AddonUpdateOne) Where(ps ...predicate.Addon) *AddonUpdateOne {
-	auo.mutation.Where(ps...)
-	return auo
+func (_u *AddonUpdateOne) Where(ps ...predicate.Addon) *AddonUpdateOne {
+	_u.mutation.Where(ps...)
+	return _u
 }
 
 // Select allows selecting one or more fields (columns) of the returned entity.
 // The default is selecting all fields defined in the entity schema.
-func (auo *AddonUpdateOne) Select(field string, fields ...string) *AddonUpdateOne {
-	auo.fields = append([]string{field}, fields...)
-	return auo
+func (_u *AddonUpdateOne) Select(field string, fields ...string) *AddonUpdateOne {
+	_u.fields = append([]string{field}, fields...)
+	return _u
 }
 
 // Save executes the query and returns the updated Addon entity.
-func (auo *AddonUpdateOne) Save(ctx context.Context) (*Addon, error) {
-	auo.defaults()
-	return withHooks(ctx, auo.sqlSave, auo.mutation, auo.hooks)
+func (_u *AddonUpdateOne) Save(ctx context.Context) (*Addon, error) {
+	_u.defaults()
+	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
 // SaveX is like Save, but panics if an error occurs.
-func (auo *AddonUpdateOne) SaveX(ctx context.Context) *Addon {
-	node, err := auo.Save(ctx)
+func (_u *AddonUpdateOne) SaveX(ctx context.Context) *Addon {
+	node, err := _u.Save(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -504,34 +504,34 @@ func (auo *AddonUpdateOne) SaveX(ctx context.Context) *Addon {
 }
 
 // Exec executes the query on the entity.
-func (auo *AddonUpdateOne) Exec(ctx context.Context) error {
-	_, err := auo.Save(ctx)
+func (_u *AddonUpdateOne) Exec(ctx context.Context) error {
+	_, err := _u.Save(ctx)
 	return err
 }
 
 // ExecX is like Exec, but panics if an error occurs.
-func (auo *AddonUpdateOne) ExecX(ctx context.Context) {
-	if err := auo.Exec(ctx); err != nil {
+func (_u *AddonUpdateOne) ExecX(ctx context.Context) {
+	if err := _u.Exec(ctx); err != nil {
 		panic(err)
 	}
 }
 
 // defaults sets the default values of the builder before save.
-func (auo *AddonUpdateOne) defaults() {
-	if _, ok := auo.mutation.UpdatedAt(); !ok {
+func (_u *AddonUpdateOne) defaults() {
+	if _, ok := _u.mutation.UpdatedAt(); !ok {
 		v := addon.UpdateDefaultUpdatedAt()
-		auo.mutation.SetUpdatedAt(v)
+		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
 // check runs all checks and user-defined validators on the builder.
-func (auo *AddonUpdateOne) check() error {
-	if v, ok := auo.mutation.Name(); ok {
+func (_u *AddonUpdateOne) check() error {
+	if v, ok := _u.mutation.Name(); ok {
 		if err := addon.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "Addon.name": %w`, err)}
 		}
 	}
-	if v, ok := auo.mutation.GetType(); ok {
+	if v, ok := _u.mutation.GetType(); ok {
 		if err := addon.TypeValidator(v); err != nil {
 			return &ValidationError{Name: "type", err: fmt.Errorf(`ent: validator failed for field "Addon.type": %w`, err)}
 		}
@@ -539,17 +539,17 @@ func (auo *AddonUpdateOne) check() error {
 	return nil
 }
 
-func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error) {
-	if err := auo.check(); err != nil {
+func (_u *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error) {
+	if err := _u.check(); err != nil {
 		return _node, err
 	}
 	_spec := sqlgraph.NewUpdateSpec(addon.Table, addon.Columns, sqlgraph.NewFieldSpec(addon.FieldID, field.TypeString))
-	id, ok := auo.mutation.ID()
+	id, ok := _u.mutation.ID()
 	if !ok {
 		return nil, &ValidationError{Name: "id", err: errors.New(`ent: missing "Addon.id" for update`)}
 	}
 	_spec.Node.ID.Value = id
-	if fields := auo.fields; len(fields) > 0 {
+	if fields := _u.fields; len(fields) > 0 {
 		_spec.Node.Columns = make([]string, 0, len(fields))
 		_spec.Node.Columns = append(_spec.Node.Columns, addon.FieldID)
 		for _, f := range fields {
@@ -561,50 +561,50 @@ func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error
 			}
 		}
 	}
-	if ps := auo.mutation.predicates; len(ps) > 0 {
+	if ps := _u.mutation.predicates; len(ps) > 0 {
 		_spec.Predicate = func(selector *sql.Selector) {
 			for i := range ps {
 				ps[i](selector)
 			}
 		}
 	}
-	if value, ok := auo.mutation.Status(); ok {
+	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(addon.FieldStatus, field.TypeString, value)
 	}
-	if value, ok := auo.mutation.UpdatedAt(); ok {
+	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(addon.FieldUpdatedAt, field.TypeTime, value)
 	}
-	if auo.mutation.CreatedByCleared() {
+	if _u.mutation.CreatedByCleared() {
 		_spec.ClearField(addon.FieldCreatedBy, field.TypeString)
 	}
-	if value, ok := auo.mutation.UpdatedBy(); ok {
+	if value, ok := _u.mutation.UpdatedBy(); ok {
 		_spec.SetField(addon.FieldUpdatedBy, field.TypeString, value)
 	}
-	if auo.mutation.UpdatedByCleared() {
+	if _u.mutation.UpdatedByCleared() {
 		_spec.ClearField(addon.FieldUpdatedBy, field.TypeString)
 	}
-	if auo.mutation.EnvironmentIDCleared() {
+	if _u.mutation.EnvironmentIDCleared() {
 		_spec.ClearField(addon.FieldEnvironmentID, field.TypeString)
 	}
-	if value, ok := auo.mutation.Name(); ok {
+	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(addon.FieldName, field.TypeString, value)
 	}
-	if value, ok := auo.mutation.Description(); ok {
+	if value, ok := _u.mutation.Description(); ok {
 		_spec.SetField(addon.FieldDescription, field.TypeString, value)
 	}
-	if auo.mutation.DescriptionCleared() {
+	if _u.mutation.DescriptionCleared() {
 		_spec.ClearField(addon.FieldDescription, field.TypeString)
 	}
-	if value, ok := auo.mutation.GetType(); ok {
+	if value, ok := _u.mutation.GetType(); ok {
 		_spec.SetField(addon.FieldType, field.TypeString, value)
 	}
-	if value, ok := auo.mutation.Metadata(); ok {
+	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(addon.FieldMetadata, field.TypeJSON, value)
 	}
-	if auo.mutation.MetadataCleared() {
+	if _u.mutation.MetadataCleared() {
 		_spec.ClearField(addon.FieldMetadata, field.TypeJSON)
 	}
-	if auo.mutation.EntitlementsCleared() {
+	if _u.mutation.EntitlementsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -617,7 +617,7 @@ func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
-	if nodes := auo.mutation.RemovedEntitlementsIDs(); len(nodes) > 0 && !auo.mutation.EntitlementsCleared() {
+	if nodes := _u.mutation.RemovedEntitlementsIDs(); len(nodes) > 0 && !_u.mutation.EntitlementsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -633,7 +633,7 @@ func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error
 		}
 		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
 	}
-	if nodes := auo.mutation.EntitlementsIDs(); len(nodes) > 0 {
+	if nodes := _u.mutation.EntitlementsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2M,
 			Inverse: false,
@@ -649,10 +649,10 @@ func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
-	_node = &Addon{config: auo.config}
+	_node = &Addon{config: _u.config}
 	_spec.Assign = _node.assignValues
 	_spec.ScanValues = _node.scanValues
-	if err = sqlgraph.UpdateNode(ctx, auo.driver, _spec); err != nil {
+	if err = sqlgraph.UpdateNode(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{addon.Label}
 		} else if sqlgraph.IsConstraintError(err) {
@@ -660,6 +660,6 @@ func (auo *AddonUpdateOne) sqlSave(ctx context.Context) (_node *Addon, err error
 		}
 		return nil, err
 	}
-	auo.mutation.done = true
+	_u.mutation.done = true
 	return _node, nil
 }

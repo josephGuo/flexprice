@@ -113,7 +113,7 @@ var (
 )
 
 // checkColumn checks if the column exists in the given table.
-func checkColumn(table, column string) error {
+func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			addon.Table:                    addon.ValidColumn,
@@ -162,7 +162,7 @@ func checkColumn(table, column string) error {
 			wallettransaction.Table:        wallettransaction.ValidColumn,
 		})
 	})
-	return columnCheck(table, column)
+	return columnCheck(t, c)
 }
 
 // Asc applies the given fields in ASC order.

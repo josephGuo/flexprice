@@ -1,10 +1,16 @@
-services:
+  # 构建迁移镜像
+  # docker compose -f docker-compose.locdev.yml build flexprice-migrate
   # docker build . -f .\Dockerfile.local -t flexprice-app.loc
-  # docker compose -f docker-compose.locdev.yml up -d
-  # 1. 移除原 postgres 服务块
+  # docker compose -f docker-compose.locdev.yml -p flexpriceloc up -d
+  # 前端镜像构建与运行
+  # docker build ../flexprice-front -f ../flexprice-front/Dockerfile -t flexprice-front.loc 
+  # docker run -p 80:3000 -e VITE_API_URL=http://localhost:8080/v1 -e VITE_AUTH_DOMAIN=http://localhost:8080/v1  flexprice-front.loc
 
+services:
   kafka:
     image: confluentinc/cp-kafka:7.7.1
+    networks:
+      - infra-pgsql
     ports:
       - "127.0.0.1:29092:29092"
     environment:
@@ -29,12 +35,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-    networks:
-      - infra-pgsql  # 加入外部PostgreSQL所在网络
-      - default
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.9-alpine
+    networks:
+      - infra-pgsql
     ports:
       - "127.0.0.1:8123:8123"
       - "127.0.0.1:9000:9000"
@@ -55,12 +60,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
-    networks:
-      - infra-pgsql
-      - default
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:main
+    networks:
+      - infra-pgsql
     profiles:
       - dev
     depends_on:
@@ -76,66 +80,100 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
-    networks:
-      - infra-pgsql
-      - default
 
   temporal:
     image: temporalio/auto-setup:1.29.2
+    networks:
+      - infra-pgsql
     ports:
       - "7233:7233"
     environment:
       - ENABLE_ES=false
       - DB=postgres12
       - DB_PORT=5432
-      #- DB_USER=postgres  # 替换为外部PostgreSQL的用户
-      #- DB_PWD=SA123root1.618  # 替换为外部PostgreSQL的密码
-      - DB_NAME=temporal  # Temporal专用库（需在外部PostgreSQL中提前创建）
-      #- DB_HOST=devPostgresql  # 替换为外部容器名
-      - POSTGRES_USER=postgres  # 替换为外部PostgreSQL的用户
-      - POSTGRES_PWD=SA123root1.618  # 替换为外部PostgreSQL的密码
-      - POSTGRES_SEEDS=devPostgresql  # 替换为外部容器名
+      - DB_USER=postgres
+      - DB_PWD=SA123root1.618
+      - DB_NAME=temporal
+      - DB_HOST=devPostgresql
+      - POSTGRES_USER=postgres
+      - POSTGRES_PWD=SA123root1.618
+      - POSTGRES_SEEDS=devPostgresql
       - TEMPORAL_PERSISTENCE_SCHEMA_DIR=/etc/temporal/schema/postgresql/v96/temporal/versioned
-    # 移除对内置postgres的依赖，挂载wait-for-it脚本等待外部PostgreSQL
-    volumes:
-      - ./wait-for-it.sh:/usr/local/bin/wait-for-it.sh:ro
-      - ./init-temporal-db.sh:/docker-entrypoint-initdb.d/init-temporal-db.sh
-      - ./migrations/postgres:/docker-entrypoint-initdb.d/
-    command: [
-      "sh", "-c",
-      "chmod +x /usr/local/bin/wait-for-it.sh && /usr/local/bin/wait-for-it.sh devPostgresql:5432 --timeout=300 -- /usr/bin/temporal-auto-setup"
-    ]
-    networks:
-      - infra-pgsql
-      - default
+    depends_on:
+      flexprice-db-init:
+        condition: service_completed_successfully
 
   temporal-ui:
     image: temporalio/ui:2.44.0
+    networks:
+      - infra-pgsql
     ports:
       - "127.0.0.1:8088:8080"
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
     depends_on:
       - temporal
-    networks:
-      - infra-pgsql
-      - default
 
+  # Build stage as a separate service that other services can depend on
   flexprice-build:
     image: flexprice-app.loc
     build:
       context: .
       dockerfile: Dockerfile.local
+      args:
+        - GOPROXY=https://goproxy.cn,direct
     profiles:
       - build-only
     command: ["echo", "Build complete"]
+
+  # Database initialization (Temporal DB, Extensions, Seed Data)
+  flexprice-db-init:
+    image: postgres:17
     networks:
       - infra-pgsql
-      - default
+    environment:
+      - PGPASSWORD=SA123root1.618
+    volumes:
+      - ./migrations/postgres:/migrations
+    command: >
+      sh -c "
+        echo 'Waiting for devPostgresql...' &&
+        until pg_isready -h devPostgresql -U postgres; do sleep 2; done &&
+        echo 'Creating temporal database...' &&
+        psql -h devPostgresql -U postgres -d postgres -c 'CREATE DATABASE temporal;' || echo 'Database temporal already exists' &&
+        echo 'Creating extensions schema and uuid-ossp extension...' &&
+        psql -h devPostgresql -U postgres -d postgres -c 'CREATE SCHEMA IF NOT EXISTS extensions;' &&
+        psql -h devPostgresql -U postgres -d postgres -c 'CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;' &&
+        echo 'Running seed data...' &&
+        psql -h devPostgresql -U postgres -d postgres -f /migrations/V1__seed.sql &&
+        echo 'Database initialization complete.'
+      "
+
+  # Ent Schema Migration
+  flexprice-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    image: flexprice-migrate.loc
+    networks:
+      - infra-pgsql
+    depends_on:
+      flexprice-db-init:
+        condition: service_completed_successfully
+    environment:
+      - FLEXPRICE_POSTGRES_HOST=devPostgresql
+      - FLEXPRICE_POSTGRES_USER=postgres
+      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
+      - FLEXPRICE_POSTGRES_DBNAME=postgres
+    restart: on-failure
 
   flexprice-api:
     image: flexprice-app.loc
+    networks:
+      - infra-pgsql
     depends_on:
+      flexprice-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       clickhouse:
@@ -146,29 +184,24 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       - FLEXPRICE_DEPLOYMENT_MODE=api
-      - FLEXPRICE_POSTGRES_HOST=devPostgresql  # 替换为外部容器名
-      - FLEXPRICE_POSTGRES_USER=postgres  # 外部PostgreSQL用户
-      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618  # 外部PostgreSQL密码
-      - FLEXPRICE_POSTGRES_DB=postgres  # 外部PostgreSQL数据库
+      - FLEXPRICE_POSTGRES_HOST=devPostgresql
+      - FLEXPRICE_POSTGRES_USER=postgres
+      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
+      - FLEXPRICE_POSTGRES_DBNAME=postgres
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
     volumes:
       - ./internal/config:/app/internal/config
-      - ./wait-for-it.sh:/usr/local/bin/wait-for-it.sh:ro
-    # 启动前等待外部PostgreSQL就绪
-    command: [
-      "sh", "-c",
-      "chmod +x /usr/local/bin/wait-for-it.sh && /usr/local/bin/wait-for-it.sh devPostgresql:5432 --timeout=300 -- /app/entrypoint.sh"  # 替换为应用实际入口
-    ]
     restart: unless-stopped
-    networks:
-      - infra-pgsql
-      - default
 
   flexprice-consumer:
     image: flexprice-app.loc
+    networks:
+      - infra-pgsql
     depends_on:
+      flexprice-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       clickhouse:
@@ -177,28 +210,24 @@ services:
         condition: service_started
     environment:
       - FLEXPRICE_DEPLOYMENT_MODE=consumer
-      - FLEXPRICE_POSTGRES_HOST=devPostgresql  # 替换为外部容器名
-      - FLEXPRICE_POSTGRES_USER=postgres  # 外部PostgreSQL用户
-      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618  # 外部PostgreSQL密码
-      - FLEXPRICE_POSTGRES_DB=postgres  # 外部PostgreSQL数据库
+      - FLEXPRICE_POSTGRES_HOST=devPostgresql
+      - FLEXPRICE_POSTGRES_USER=postgres
+      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
+      - FLEXPRICE_POSTGRES_DBNAME=postgres
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
     volumes:
       - ./internal/config:/app/internal/config
-      - ./wait-for-it.sh:/usr/local/bin/wait-for-it.sh:ro
-    command: [
-      "sh", "-c",
-      "chmod +x /usr/local/bin/wait-for-it.sh && /usr/local/bin/wait-for-it.sh devPostgresql:5432 --timeout=300 -- /app/entrypoint.sh"  # 替换为应用实际入口
-    ]
     restart: unless-stopped
-    networks:
-      - infra-pgsql
-      - default
 
   flexprice-worker:
     image: flexprice-app.loc
+    networks:
+      - infra-pgsql
     depends_on:
+      flexprice-migrate:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       clickhouse:
@@ -207,33 +236,36 @@ services:
         condition: service_started
     environment:
       - FLEXPRICE_DEPLOYMENT_MODE=temporal_worker
-      - FLEXPRICE_POSTGRES_HOST=devPostgresql  # 替换为外部容器名
-      - FLEXPRICE_POSTGRES_USER=postgres  # 外部PostgreSQL用户
-      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618  # 外部PostgreSQL密码
-      - FLEXPRICE_POSTGRES_DB=postgres  # 外部PostgreSQL数据库
+      - FLEXPRICE_POSTGRES_HOST=devPostgresql
+      - FLEXPRICE_POSTGRES_USER=postgres
+      - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
+      - FLEXPRICE_POSTGRES_DBNAME=postgres
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
     volumes:
       - ./internal/config:/app/internal/config
-      - ./wait-for-it.sh:/usr/local/bin/wait-for-it.sh:ro
-    command: [
-      "sh", "-c",
-      "chmod +x /usr/local/bin/wait-for-it.sh && /usr/local/bin/wait-for-it.sh devPostgresql:5432 --timeout=300 -- /app/entrypoint.sh"  # 替换为应用实际入口
-    ]
     restart: unless-stopped
-    networks:
-      - infra-pgsql
-      - default
 
-# 2. 移除无用的 postgres-data 卷
+  flexprice-front:
+    image: flexprice-front.loc
+    container_name: flexprice-front
+    build:
+      context: ../flexprice-front
+      dockerfile: ../flexprice-front/Dockerfile
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s  
+
+networks:
+  infra-pgsql:
+    external: true
+
 volumes:
   kafka-data:
   clickhouse-data:
-
-# 3. 声明外部网络（需提前创建：docker network create infra-pgsql）
-networks:
-  infra-pgsql:
-    external: true  # 表示该网络已存在（外部PostgreSQL容器已加入）
-  default:
-    driver: bridge

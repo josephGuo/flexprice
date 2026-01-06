@@ -1904,8 +1904,8 @@ func testAddAddonToSubscription(ctx context.Context, client *flexprice.APIClient
 
 	// Create a price for the addon first (required)
 	priceRequest := flexprice.DtoCreatePriceRequest{
-		EntityId:       testAddonID,
-		EntityType:     flexprice.TYPESPRICEENTITYTYPE_PRICE_ENTITY_TYPE_ADDON,
+		EntityId:       &testAddonID,
+		EntityType:     flexprice.TYPESPRICEENTITYTYPE_PRICE_ENTITY_TYPE_ADDON.Ptr(),
 		Type:           flexprice.TYPESPRICETYPE_PRICE_TYPE_FIXED,
 		BillingModel:   flexprice.TYPESBILLINGMODEL_BILLING_MODEL_FLAT_FEE,
 		BillingCadence: flexprice.TYPESBILLINGCADENCE_BILLING_CADENCE_RECURRING,
@@ -1913,7 +1913,7 @@ func testAddAddonToSubscription(ctx context.Context, client *flexprice.APIClient
 		InvoiceCadence: flexprice.TYPESINVOICECADENCE_InvoiceCadenceArrear,
 		Amount:         lo.ToPtr("5.00"),
 		Currency:       "USD",
-		DisplayName:    lo.ToPtr("Addon Monthly Price"),
+		//DisplayName:    lo.ToPtr("Addon Monthly Price"),
 	}
 
 	_, priceResponse, err := client.PricesAPI.PricesPost(ctx).
