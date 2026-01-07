@@ -13,6 +13,9 @@ RUN go mod download
 
 # 复制源码并构建
 COPY . .
+# 生成 Ent 代码
+RUN go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/execquery ./ent/schema
+
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o migrate cmd/migrate/main.go
 
 FROM alpine:3.22

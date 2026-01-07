@@ -1,3 +1,5 @@
+  # 生成代码generate-ent:
+  # go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/execquery ./ent/schema
   # 构建迁移镜像
   # docker compose -f docker-compose.locdev.yml build flexprice-migrate
   # docker build . -f .\Dockerfile.local -t flexprice-app.loc
@@ -128,13 +130,16 @@ services:
 
   # Database initialization (Temporal DB, Extensions, Seed Data)
   flexprice-db-init:
-    image: postgres:17
+    image: postgres:17-alpine
     networks:
       - infra-pgsql
     environment:
       - PGPASSWORD=SA123root1.618
     volumes:
-      - ./migrations/postgres:/migrations
+      - ./migrations:/migrations
+    depends_on:
+      clickhouse:
+        condition: service_healthy      
     command: >
       sh -c "
         echo 'Waiting for devPostgresql...' &&
@@ -145,7 +150,18 @@ services:
         psql -h devPostgresql -U postgres -d postgres -c 'CREATE SCHEMA IF NOT EXISTS extensions;' &&
         psql -h devPostgresql -U postgres -d postgres -c 'CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\" SCHEMA extensions;' &&
         echo 'Running seed data...' &&
-        psql -h devPostgresql -U postgres -d postgres -f /migrations/V1__seed.sql &&
+        psql -h devPostgresql -U postgres -d postgres -f /migrations/postgres/V1__seed.sql &&
+        
+        echo 'Waiting for ClickHouse to be ready...' &&
+        sleep 5 &&
+        for file in /migrations/clickhouse/*.sql; do
+          if [ -f \"$$file\" ]; then
+            echo 'Running migration: '\"$$file\" &&
+            clickhouse-client --host clickhouse --user flexprice --password flexprice123 --database flexprice --multiquery < \"$$file\";
+          fi
+        done &&
+        echo 'ClickHouse migrations complete.'
+
         echo 'Database initialization complete.'
       "
 
@@ -164,7 +180,7 @@ services:
       - FLEXPRICE_POSTGRES_HOST=devPostgresql
       - FLEXPRICE_POSTGRES_USER=postgres
       - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
-      - FLEXPRICE_POSTGRES_DBNAME=postgres
+      - FLEXPRICE_POSTGRES_DBNAME=flexprice
     restart: on-failure
 
   flexprice-api:
@@ -187,7 +203,7 @@ services:
       - FLEXPRICE_POSTGRES_HOST=devPostgresql
       - FLEXPRICE_POSTGRES_USER=postgres
       - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
-      - FLEXPRICE_POSTGRES_DBNAME=postgres
+      - FLEXPRICE_POSTGRES_DBNAME=flexprice
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
@@ -213,7 +229,7 @@ services:
       - FLEXPRICE_POSTGRES_HOST=devPostgresql
       - FLEXPRICE_POSTGRES_USER=postgres
       - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
-      - FLEXPRICE_POSTGRES_DBNAME=postgres
+      - FLEXPRICE_POSTGRES_DBNAME=flexprice
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
@@ -239,7 +255,7 @@ services:
       - FLEXPRICE_POSTGRES_HOST=devPostgresql
       - FLEXPRICE_POSTGRES_USER=postgres
       - FLEXPRICE_POSTGRES_PASSWORD=SA123root1.618
-      - FLEXPRICE_POSTGRES_DBNAME=postgres
+      - FLEXPRICE_POSTGRES_DBNAME=flexprice
       - FLEXPRICE_KAFKA_BROKERS=kafka:9092
       - FLEXPRICE_CLICKHOUSE_ADDRESS=clickhouse:9000
       - FLEXPRICE_TEMPORAL_ADDRESS=temporal:7233
@@ -254,7 +270,7 @@ services:
       context: ../flexprice-front
       dockerfile: ../flexprice-front/Dockerfile
     ports:
-      - "3000:3000"
+      - "80:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s

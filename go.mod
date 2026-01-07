@@ -17,7 +17,8 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/chargebee/chargebee-go/v3 v3.42.0
 	github.com/cockroachdb/errors v1.12.0
-	github.com/flexprice/go-sdk v1.0.42
+	github.com/flexprice/go-sdk v1.0.43
+	github.com/flexprice/go-sdk-temp v1.0.58
 	github.com/getsentry/sentry-go v0.40.0
 	github.com/getsentry/sentry-go/gin v0.40.0
 	github.com/gin-gonic/gin v1.11.0
