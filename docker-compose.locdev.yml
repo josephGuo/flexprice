@@ -1,9 +1,14 @@
   # 生成代码generate-ent:
-  # go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/execquery ./ent/schema
+  # 1. go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/execquery ./ent/schema
   # 构建迁移镜像
-  # docker compose -f docker-compose.locdev.yml build flexprice-migrate
-  # docker build . -f .\Dockerfile.local -t flexprice-app.loc
+  # 2. docker compose -f docker-compose.locdev.yml build flexprice-migrate
+  # 3. docker build . -f .\Dockerfile.local -t flexprice-app.loc
+  # 一、self-host docker容器运行
   # docker compose -f docker-compose.locdev.yml -p flexpriceloc up -d
+  # 二、本地调试运行
+  # docker build . -f .\Dockerfile.local kafka clickhouse temporal temporal-ui
+  # go run cmd/server/main.go
+
   # 前端镜像构建与运行
   # docker build ../flexprice-front -f ../flexprice-front/Dockerfile -t flexprice-front.loc 
   # docker run -p 80:3000 -e VITE_API_URL=http://localhost:8080/v1 -e VITE_AUTH_DOMAIN=http://localhost:8080/v1  flexprice-front.loc
