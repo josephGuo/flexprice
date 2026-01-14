@@ -63,7 +63,11 @@ type WalletTransaction struct {
 	// CreditsAvailable holds the value of the "credits_available" field.
 	CreditsAvailable decimal.Decimal `json:"credits_available,omitempty"`
 	// Currency holds the value of the "currency" field.
-	Currency *string `json:"currency,omitempty"`
+	Currency string `json:"currency,omitempty"`
+	// ConversionRate holds the value of the "conversion_rate" field.
+	ConversionRate *decimal.Decimal `json:"conversion_rate,omitempty"`
+	// TopupConversionRate holds the value of the "topup_conversion_rate" field.
+	TopupConversionRate *decimal.Decimal `json:"topup_conversion_rate,omitempty"`
 	// IdempotencyKey holds the value of the "idempotency_key" field.
 	IdempotencyKey *string `json:"idempotency_key,omitempty"`
 	// TransactionReason holds the value of the "transaction_reason" field.
@@ -78,6 +82,8 @@ func (*WalletTransaction) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case wallettransaction.FieldConversionRate, wallettransaction.FieldTopupConversionRate:
+			values[i] = &sql.NullScanner{S: new(decimal.Decimal)}
 		case wallettransaction.FieldMetadata:
 			values[i] = new([]byte)
 		case wallettransaction.FieldAmount, wallettransaction.FieldCreditAmount, wallettransaction.FieldCreditBalanceBefore, wallettransaction.FieldCreditBalanceAfter, wallettransaction.FieldCreditsAvailable:
@@ -242,8 +248,21 @@ func (_m *WalletTransaction) assignValues(columns []string, values []any) error 
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field currency", values[i])
 			} else if value.Valid {
-				_m.Currency = new(string)
-				*_m.Currency = value.String
+				_m.Currency = value.String
+			}
+		case wallettransaction.FieldConversionRate:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field conversion_rate", values[i])
+			} else if value.Valid {
+				_m.ConversionRate = new(decimal.Decimal)
+				*_m.ConversionRate = *value.S.(*decimal.Decimal)
+			}
+		case wallettransaction.FieldTopupConversionRate:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field topup_conversion_rate", values[i])
+			} else if value.Valid {
+				_m.TopupConversionRate = new(decimal.Decimal)
+				*_m.TopupConversionRate = *value.S.(*decimal.Decimal)
 			}
 		case wallettransaction.FieldIdempotencyKey:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -366,9 +385,17 @@ func (_m *WalletTransaction) String() string {
 	builder.WriteString("credits_available=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CreditsAvailable))
 	builder.WriteString(", ")
-	if v := _m.Currency; v != nil {
-		builder.WriteString("currency=")
-		builder.WriteString(*v)
+	builder.WriteString("currency=")
+	builder.WriteString(_m.Currency)
+	builder.WriteString(", ")
+	if v := _m.ConversionRate; v != nil {
+		builder.WriteString("conversion_rate=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.TopupConversionRate; v != nil {
+		builder.WriteString("topup_conversion_rate=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
 	if v := _m.IdempotencyKey; v != nil {

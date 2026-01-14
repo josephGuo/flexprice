@@ -151,6 +151,26 @@ func (_u *CreditGrantUpdate) ClearMetadata() *CreditGrantUpdate {
 	return _u
 }
 
+// SetEndDate sets the "end_date" field.
+func (_u *CreditGrantUpdate) SetEndDate(v time.Time) *CreditGrantUpdate {
+	_u.mutation.SetEndDate(v)
+	return _u
+}
+
+// SetNillableEndDate sets the "end_date" field if the given value is not nil.
+func (_u *CreditGrantUpdate) SetNillableEndDate(v *time.Time) *CreditGrantUpdate {
+	if v != nil {
+		_u.SetEndDate(*v)
+	}
+	return _u
+}
+
+// ClearEndDate clears the value of the "end_date" field.
+func (_u *CreditGrantUpdate) ClearEndDate() *CreditGrantUpdate {
+	_u.mutation.ClearEndDate()
+	return _u
+}
+
 // SetPlan sets the "plan" edge to the Plan entity.
 func (_u *CreditGrantUpdate) SetPlan(v *Plan) *CreditGrantUpdate {
 	return _u.SetPlanID(v.ID)
@@ -265,6 +285,12 @@ func (_u *CreditGrantUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(creditgrant.FieldScope, field.TypeString, value)
 	}
+	if _u.mutation.ConversionRateCleared() {
+		_spec.ClearField(creditgrant.FieldConversionRate, field.TypeOther)
+	}
+	if _u.mutation.TopupConversionRateCleared() {
+		_spec.ClearField(creditgrant.FieldTopupConversionRate, field.TypeOther)
+	}
 	if _u.mutation.PeriodCleared() {
 		_spec.ClearField(creditgrant.FieldPeriod, field.TypeString)
 	}
@@ -288,6 +314,9 @@ func (_u *CreditGrantUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	}
 	if _u.mutation.StartDateCleared() {
 		_spec.ClearField(creditgrant.FieldStartDate, field.TypeTime)
+	}
+	if value, ok := _u.mutation.EndDate(); ok {
+		_spec.SetField(creditgrant.FieldEndDate, field.TypeTime, value)
 	}
 	if _u.mutation.EndDateCleared() {
 		_spec.ClearField(creditgrant.FieldEndDate, field.TypeTime)
@@ -493,6 +522,26 @@ func (_u *CreditGrantUpdateOne) ClearMetadata() *CreditGrantUpdateOne {
 	return _u
 }
 
+// SetEndDate sets the "end_date" field.
+func (_u *CreditGrantUpdateOne) SetEndDate(v time.Time) *CreditGrantUpdateOne {
+	_u.mutation.SetEndDate(v)
+	return _u
+}
+
+// SetNillableEndDate sets the "end_date" field if the given value is not nil.
+func (_u *CreditGrantUpdateOne) SetNillableEndDate(v *time.Time) *CreditGrantUpdateOne {
+	if v != nil {
+		_u.SetEndDate(*v)
+	}
+	return _u
+}
+
+// ClearEndDate clears the value of the "end_date" field.
+func (_u *CreditGrantUpdateOne) ClearEndDate() *CreditGrantUpdateOne {
+	_u.mutation.ClearEndDate()
+	return _u
+}
+
 // SetPlan sets the "plan" edge to the Plan entity.
 func (_u *CreditGrantUpdateOne) SetPlan(v *Plan) *CreditGrantUpdateOne {
 	return _u.SetPlanID(v.ID)
@@ -637,6 +686,12 @@ func (_u *CreditGrantUpdateOne) sqlSave(ctx context.Context) (_node *CreditGrant
 	if value, ok := _u.mutation.Scope(); ok {
 		_spec.SetField(creditgrant.FieldScope, field.TypeString, value)
 	}
+	if _u.mutation.ConversionRateCleared() {
+		_spec.ClearField(creditgrant.FieldConversionRate, field.TypeOther)
+	}
+	if _u.mutation.TopupConversionRateCleared() {
+		_spec.ClearField(creditgrant.FieldTopupConversionRate, field.TypeOther)
+	}
 	if _u.mutation.PeriodCleared() {
 		_spec.ClearField(creditgrant.FieldPeriod, field.TypeString)
 	}
@@ -660,6 +715,9 @@ func (_u *CreditGrantUpdateOne) sqlSave(ctx context.Context) (_node *CreditGrant
 	}
 	if _u.mutation.StartDateCleared() {
 		_spec.ClearField(creditgrant.FieldStartDate, field.TypeTime)
+	}
+	if value, ok := _u.mutation.EndDate(); ok {
+		_spec.SetField(creditgrant.FieldEndDate, field.TypeTime, value)
 	}
 	if _u.mutation.EndDateCleared() {
 		_spec.ClearField(creditgrant.FieldEndDate, field.TypeTime)

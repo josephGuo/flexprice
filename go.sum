@@ -109,8 +109,6 @@ github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a h1:yDWHCSQ40h88yi
 github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a/go.mod h1:7Ga40egUymuWXxAe151lTNnCv97MddSOVsjpPPkityA=
 github.com/fatih/color v1.16.0 h1:zmkK9Ngbjj+K0yRhTVONQh1p/HknKYSlNT+vZCzyokM=
 github.com/fatih/color v1.16.0/go.mod h1:fL2Sau1YI5c0pdGEVCbKQbLXB6edEj1ZgiY4NijnWvE=
-github.com/flexprice/go-sdk v1.0.42 h1:7XyHBur47MYjvgUcI+u9XNaR7zwaydbkw4cGCCVG1ls=
-github.com/flexprice/go-sdk v1.0.42/go.mod h1:ba0SiRO4N5iIQenGMIyvk/0lOuzhf1vji3M3D0SxBKg=
 github.com/flexprice/go-sdk v1.0.43 h1:TIIte+BF0/nBilpqOvEjtFvZJuWEMD3lg3m+sgyJ3rs=
 github.com/flexprice/go-sdk v1.0.43/go.mod h1:ba0SiRO4N5iIQenGMIyvk/0lOuzhf1vji3M3D0SxBKg=
 github.com/flexprice/go-sdk-temp v1.0.58 h1:n8N6nKIGJLRifzchV7EtitzCkENcshcsDs1M3Jalffg=
