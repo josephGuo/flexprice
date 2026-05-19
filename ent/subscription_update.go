@@ -20,6 +20,7 @@ import (
 	"github.com/flexprice/flexprice/ent/subscriptionlineitem"
 	"github.com/flexprice/flexprice/ent/subscriptionpause"
 	"github.com/flexprice/flexprice/ent/subscriptionphase"
+	"github.com/flexprice/flexprice/ent/subscriptionschedule"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/shopspring/decimal"
 )
@@ -368,6 +369,26 @@ func (_u *SubscriptionUpdate) ClearCommitmentAmount() *SubscriptionUpdate {
 	return _u
 }
 
+// SetCommitmentDuration sets the "commitment_duration" field.
+func (su *SubscriptionUpdate) SetCommitmentDuration(tp types.BillingPeriod) *SubscriptionUpdate {
+	su.mutation.SetCommitmentDuration(tp)
+	return su
+}
+
+// SetNillableCommitmentDuration sets the "commitment_duration" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillableCommitmentDuration(tp *types.BillingPeriod) *SubscriptionUpdate {
+	if tp != nil {
+		su.SetCommitmentDuration(*tp)
+	}
+	return su
+}
+
+// ClearCommitmentDuration clears the value of the "commitment_duration" field.
+func (su *SubscriptionUpdate) ClearCommitmentDuration() *SubscriptionUpdate {
+	su.mutation.ClearCommitmentDuration()
+	return su
+}
+
 // SetOverageFactor sets the "overage_factor" field.
 func (_u *SubscriptionUpdate) SetOverageFactor(v decimal.Decimal) *SubscriptionUpdate {
 	_u.mutation.SetOverageFactor(v)
@@ -484,6 +505,101 @@ func (_u *SubscriptionUpdate) ClearInvoicingCustomerID() *SubscriptionUpdate {
 	return _u
 }
 
+// SetParentSubscriptionID sets the "parent_subscription_id" field.
+func (su *SubscriptionUpdate) SetParentSubscriptionID(s string) *SubscriptionUpdate {
+	su.mutation.SetParentSubscriptionID(s)
+	return su
+}
+
+// SetNillableParentSubscriptionID sets the "parent_subscription_id" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillableParentSubscriptionID(s *string) *SubscriptionUpdate {
+	if s != nil {
+		su.SetParentSubscriptionID(*s)
+	}
+	return su
+}
+
+// ClearParentSubscriptionID clears the value of the "parent_subscription_id" field.
+func (su *SubscriptionUpdate) ClearParentSubscriptionID() *SubscriptionUpdate {
+	su.mutation.ClearParentSubscriptionID()
+	return su
+}
+
+// SetPaymentTerms sets the "payment_terms" field.
+func (su *SubscriptionUpdate) SetPaymentTerms(tt types.PaymentTerms) *SubscriptionUpdate {
+	su.mutation.SetPaymentTerms(tt)
+	return su
+}
+
+// SetNillablePaymentTerms sets the "payment_terms" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillablePaymentTerms(tt *types.PaymentTerms) *SubscriptionUpdate {
+	if tt != nil {
+		su.SetPaymentTerms(*tt)
+	}
+	return su
+}
+
+// ClearPaymentTerms clears the value of the "payment_terms" field.
+func (su *SubscriptionUpdate) ClearPaymentTerms() *SubscriptionUpdate {
+	su.mutation.ClearPaymentTerms()
+	return su
+}
+
+// SetSubscriptionType sets the "subscription_type" field.
+func (su *SubscriptionUpdate) SetSubscriptionType(tt types.SubscriptionType) *SubscriptionUpdate {
+	su.mutation.SetSubscriptionType(tt)
+	return su
+}
+
+// SetNillableSubscriptionType sets the "subscription_type" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillableSubscriptionType(tt *types.SubscriptionType) *SubscriptionUpdate {
+	if tt != nil {
+		su.SetSubscriptionType(*tt)
+	}
+	return su
+}
+
+// SetAutoInvoiceThreshold sets the "auto_invoice_threshold" field.
+func (su *SubscriptionUpdate) SetAutoInvoiceThreshold(d decimal.Decimal) *SubscriptionUpdate {
+	su.mutation.SetAutoInvoiceThreshold(d)
+	return su
+}
+
+// SetNillableAutoInvoiceThreshold sets the "auto_invoice_threshold" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillableAutoInvoiceThreshold(d *decimal.Decimal) *SubscriptionUpdate {
+	if d != nil {
+		su.SetAutoInvoiceThreshold(*d)
+	}
+	return su
+}
+
+// ClearAutoInvoiceThreshold clears the value of the "auto_invoice_threshold" field.
+func (su *SubscriptionUpdate) ClearAutoInvoiceThreshold() *SubscriptionUpdate {
+	su.mutation.ClearAutoInvoiceThreshold()
+	return su
+}
+
+// SetSyncedPriceSequence sets the "synced_price_sequence" field.
+func (su *SubscriptionUpdate) SetSyncedPriceSequence(i int64) *SubscriptionUpdate {
+	su.mutation.ResetSyncedPriceSequence()
+	su.mutation.SetSyncedPriceSequence(i)
+	return su
+}
+
+// SetNillableSyncedPriceSequence sets the "synced_price_sequence" field if the given value is not nil.
+func (su *SubscriptionUpdate) SetNillableSyncedPriceSequence(i *int64) *SubscriptionUpdate {
+	if i != nil {
+		su.SetSyncedPriceSequence(*i)
+	}
+	return su
+}
+
+// AddSyncedPriceSequence adds i to the "synced_price_sequence" field.
+func (su *SubscriptionUpdate) AddSyncedPriceSequence(i int64) *SubscriptionUpdate {
+	su.mutation.AddSyncedPriceSequence(i)
+	return su
+}
+
 // AddLineItemIDs adds the "line_items" edge to the SubscriptionLineItem entity by IDs.
 func (_u *SubscriptionUpdate) AddLineItemIDs(ids ...string) *SubscriptionUpdate {
 	_u.mutation.AddLineItemIDs(ids...)
@@ -527,6 +643,21 @@ func (_u *SubscriptionUpdate) AddPhases(v ...*SubscriptionPhase) *SubscriptionUp
 		ids[i] = v[i].ID
 	}
 	return _u.AddPhaseIDs(ids...)
+}
+
+// AddScheduleIDs adds the "schedules" edge to the SubscriptionSchedule entity by IDs.
+func (su *SubscriptionUpdate) AddScheduleIDs(ids ...string) *SubscriptionUpdate {
+	su.mutation.AddScheduleIDs(ids...)
+	return su
+}
+
+// AddSchedules adds the "schedules" edges to the SubscriptionSchedule entity.
+func (su *SubscriptionUpdate) AddSchedules(s ...*SubscriptionSchedule) *SubscriptionUpdate {
+	ids := make([]string, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return su.AddScheduleIDs(ids...)
 }
 
 // AddCreditGrantIDs adds the "credit_grants" edge to the CreditGrant entity by IDs.
@@ -645,6 +776,27 @@ func (_u *SubscriptionUpdate) RemovePhases(v ...*SubscriptionPhase) *Subscriptio
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePhaseIDs(ids...)
+}
+
+// ClearSchedules clears all "schedules" edges to the SubscriptionSchedule entity.
+func (su *SubscriptionUpdate) ClearSchedules() *SubscriptionUpdate {
+	su.mutation.ClearSchedules()
+	return su
+}
+
+// RemoveScheduleIDs removes the "schedules" edge to SubscriptionSchedule entities by IDs.
+func (su *SubscriptionUpdate) RemoveScheduleIDs(ids ...string) *SubscriptionUpdate {
+	su.mutation.RemoveScheduleIDs(ids...)
+	return su
+}
+
+// RemoveSchedules removes "schedules" edges to SubscriptionSchedule entities.
+func (su *SubscriptionUpdate) RemoveSchedules(s ...*SubscriptionSchedule) *SubscriptionUpdate {
+	ids := make([]string, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return su.RemoveScheduleIDs(ids...)
 }
 
 // ClearCreditGrants clears all "credit_grants" edges to the CreditGrant entity.
@@ -860,6 +1012,12 @@ func (_u *SubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if _u.mutation.CommitmentAmountCleared() {
 		_spec.ClearField(subscription.FieldCommitmentAmount, field.TypeOther)
 	}
+	if value, ok := _u.mutation.CommitmentDuration(); ok {
+		_spec.SetField(subscription.FieldCommitmentDuration, field.TypeString, value)
+	}
+	if _u.mutation.CommitmentDurationCleared() {
+		_spec.ClearField(subscription.FieldCommitmentDuration, field.TypeString)
+	}
 	if value, ok := _u.mutation.OverageFactor(); ok {
 		_spec.SetField(subscription.FieldOverageFactor, field.TypeOther, value)
 	}
@@ -883,6 +1041,33 @@ func (_u *SubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if value, ok := _u.mutation.EnableTrueUp(); ok {
 		_spec.SetField(subscription.FieldEnableTrueUp, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ParentSubscriptionID(); ok {
+		_spec.SetField(subscription.FieldParentSubscriptionID, field.TypeString, value)
+	}
+	if _u.mutation.ParentSubscriptionIDCleared() {
+		_spec.ClearField(subscription.FieldParentSubscriptionID, field.TypeString)
+	}
+	if value, ok := _u.mutation.PaymentTerms(); ok {
+		_spec.SetField(subscription.FieldPaymentTerms, field.TypeString, value)
+	}
+	if _u.mutation.PaymentTermsCleared() {
+		_spec.ClearField(subscription.FieldPaymentTerms, field.TypeString)
+	}
+	if value, ok := _u.mutation.SubscriptionType(); ok {
+		_spec.SetField(subscription.FieldSubscriptionType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.AutoInvoiceThreshold(); ok {
+		_spec.SetField(subscription.FieldAutoInvoiceThreshold, field.TypeOther, value)
+	}
+	if _u.mutation.AutoInvoiceThresholdCleared() {
+		_spec.ClearField(subscription.FieldAutoInvoiceThreshold, field.TypeOther)
+	}
+	if value, ok := _u.mutation.SyncedPriceSequence(); ok {
+		_spec.SetField(subscription.FieldSyncedPriceSequence, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSyncedPriceSequence(); ok {
+		_spec.AddField(subscription.FieldSyncedPriceSequence, field.TypeInt64, value)
 	}
 	if _u.mutation.LineItemsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1012,6 +1197,51 @@ func (_u *SubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err error
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(subscriptionphase.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SchedulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSchedulesIDs(); len(nodes) > 0 && !_u.mutation.SchedulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SchedulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {
@@ -1534,6 +1764,26 @@ func (_u *SubscriptionUpdateOne) ClearCommitmentAmount() *SubscriptionUpdateOne 
 	return _u
 }
 
+// SetCommitmentDuration sets the "commitment_duration" field.
+func (suo *SubscriptionUpdateOne) SetCommitmentDuration(tp types.BillingPeriod) *SubscriptionUpdateOne {
+	suo.mutation.SetCommitmentDuration(tp)
+	return suo
+}
+
+// SetNillableCommitmentDuration sets the "commitment_duration" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillableCommitmentDuration(tp *types.BillingPeriod) *SubscriptionUpdateOne {
+	if tp != nil {
+		suo.SetCommitmentDuration(*tp)
+	}
+	return suo
+}
+
+// ClearCommitmentDuration clears the value of the "commitment_duration" field.
+func (suo *SubscriptionUpdateOne) ClearCommitmentDuration() *SubscriptionUpdateOne {
+	suo.mutation.ClearCommitmentDuration()
+	return suo
+}
+
 // SetOverageFactor sets the "overage_factor" field.
 func (_u *SubscriptionUpdateOne) SetOverageFactor(v decimal.Decimal) *SubscriptionUpdateOne {
 	_u.mutation.SetOverageFactor(v)
@@ -1650,6 +1900,101 @@ func (_u *SubscriptionUpdateOne) ClearInvoicingCustomerID() *SubscriptionUpdateO
 	return _u
 }
 
+// SetParentSubscriptionID sets the "parent_subscription_id" field.
+func (suo *SubscriptionUpdateOne) SetParentSubscriptionID(s string) *SubscriptionUpdateOne {
+	suo.mutation.SetParentSubscriptionID(s)
+	return suo
+}
+
+// SetNillableParentSubscriptionID sets the "parent_subscription_id" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillableParentSubscriptionID(s *string) *SubscriptionUpdateOne {
+	if s != nil {
+		suo.SetParentSubscriptionID(*s)
+	}
+	return suo
+}
+
+// ClearParentSubscriptionID clears the value of the "parent_subscription_id" field.
+func (suo *SubscriptionUpdateOne) ClearParentSubscriptionID() *SubscriptionUpdateOne {
+	suo.mutation.ClearParentSubscriptionID()
+	return suo
+}
+
+// SetPaymentTerms sets the "payment_terms" field.
+func (suo *SubscriptionUpdateOne) SetPaymentTerms(tt types.PaymentTerms) *SubscriptionUpdateOne {
+	suo.mutation.SetPaymentTerms(tt)
+	return suo
+}
+
+// SetNillablePaymentTerms sets the "payment_terms" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillablePaymentTerms(tt *types.PaymentTerms) *SubscriptionUpdateOne {
+	if tt != nil {
+		suo.SetPaymentTerms(*tt)
+	}
+	return suo
+}
+
+// ClearPaymentTerms clears the value of the "payment_terms" field.
+func (suo *SubscriptionUpdateOne) ClearPaymentTerms() *SubscriptionUpdateOne {
+	suo.mutation.ClearPaymentTerms()
+	return suo
+}
+
+// SetSubscriptionType sets the "subscription_type" field.
+func (suo *SubscriptionUpdateOne) SetSubscriptionType(tt types.SubscriptionType) *SubscriptionUpdateOne {
+	suo.mutation.SetSubscriptionType(tt)
+	return suo
+}
+
+// SetNillableSubscriptionType sets the "subscription_type" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillableSubscriptionType(tt *types.SubscriptionType) *SubscriptionUpdateOne {
+	if tt != nil {
+		suo.SetSubscriptionType(*tt)
+	}
+	return suo
+}
+
+// SetAutoInvoiceThreshold sets the "auto_invoice_threshold" field.
+func (suo *SubscriptionUpdateOne) SetAutoInvoiceThreshold(d decimal.Decimal) *SubscriptionUpdateOne {
+	suo.mutation.SetAutoInvoiceThreshold(d)
+	return suo
+}
+
+// SetNillableAutoInvoiceThreshold sets the "auto_invoice_threshold" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillableAutoInvoiceThreshold(d *decimal.Decimal) *SubscriptionUpdateOne {
+	if d != nil {
+		suo.SetAutoInvoiceThreshold(*d)
+	}
+	return suo
+}
+
+// ClearAutoInvoiceThreshold clears the value of the "auto_invoice_threshold" field.
+func (suo *SubscriptionUpdateOne) ClearAutoInvoiceThreshold() *SubscriptionUpdateOne {
+	suo.mutation.ClearAutoInvoiceThreshold()
+	return suo
+}
+
+// SetSyncedPriceSequence sets the "synced_price_sequence" field.
+func (suo *SubscriptionUpdateOne) SetSyncedPriceSequence(i int64) *SubscriptionUpdateOne {
+	suo.mutation.ResetSyncedPriceSequence()
+	suo.mutation.SetSyncedPriceSequence(i)
+	return suo
+}
+
+// SetNillableSyncedPriceSequence sets the "synced_price_sequence" field if the given value is not nil.
+func (suo *SubscriptionUpdateOne) SetNillableSyncedPriceSequence(i *int64) *SubscriptionUpdateOne {
+	if i != nil {
+		suo.SetSyncedPriceSequence(*i)
+	}
+	return suo
+}
+
+// AddSyncedPriceSequence adds i to the "synced_price_sequence" field.
+func (suo *SubscriptionUpdateOne) AddSyncedPriceSequence(i int64) *SubscriptionUpdateOne {
+	suo.mutation.AddSyncedPriceSequence(i)
+	return suo
+}
+
 // AddLineItemIDs adds the "line_items" edge to the SubscriptionLineItem entity by IDs.
 func (_u *SubscriptionUpdateOne) AddLineItemIDs(ids ...string) *SubscriptionUpdateOne {
 	_u.mutation.AddLineItemIDs(ids...)
@@ -1693,6 +2038,21 @@ func (_u *SubscriptionUpdateOne) AddPhases(v ...*SubscriptionPhase) *Subscriptio
 		ids[i] = v[i].ID
 	}
 	return _u.AddPhaseIDs(ids...)
+}
+
+// AddScheduleIDs adds the "schedules" edge to the SubscriptionSchedule entity by IDs.
+func (suo *SubscriptionUpdateOne) AddScheduleIDs(ids ...string) *SubscriptionUpdateOne {
+	suo.mutation.AddScheduleIDs(ids...)
+	return suo
+}
+
+// AddSchedules adds the "schedules" edges to the SubscriptionSchedule entity.
+func (suo *SubscriptionUpdateOne) AddSchedules(s ...*SubscriptionSchedule) *SubscriptionUpdateOne {
+	ids := make([]string, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return suo.AddScheduleIDs(ids...)
 }
 
 // AddCreditGrantIDs adds the "credit_grants" edge to the CreditGrant entity by IDs.
@@ -1811,6 +2171,27 @@ func (_u *SubscriptionUpdateOne) RemovePhases(v ...*SubscriptionPhase) *Subscrip
 		ids[i] = v[i].ID
 	}
 	return _u.RemovePhaseIDs(ids...)
+}
+
+// ClearSchedules clears all "schedules" edges to the SubscriptionSchedule entity.
+func (suo *SubscriptionUpdateOne) ClearSchedules() *SubscriptionUpdateOne {
+	suo.mutation.ClearSchedules()
+	return suo
+}
+
+// RemoveScheduleIDs removes the "schedules" edge to SubscriptionSchedule entities by IDs.
+func (suo *SubscriptionUpdateOne) RemoveScheduleIDs(ids ...string) *SubscriptionUpdateOne {
+	suo.mutation.RemoveScheduleIDs(ids...)
+	return suo
+}
+
+// RemoveSchedules removes "schedules" edges to SubscriptionSchedule entities.
+func (suo *SubscriptionUpdateOne) RemoveSchedules(s ...*SubscriptionSchedule) *SubscriptionUpdateOne {
+	ids := make([]string, len(s))
+	for i := range s {
+		ids[i] = s[i].ID
+	}
+	return suo.RemoveScheduleIDs(ids...)
 }
 
 // ClearCreditGrants clears all "credit_grants" edges to the CreditGrant entity.
@@ -2056,6 +2437,12 @@ func (_u *SubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *Subscripti
 	if _u.mutation.CommitmentAmountCleared() {
 		_spec.ClearField(subscription.FieldCommitmentAmount, field.TypeOther)
 	}
+	if value, ok := _u.mutation.CommitmentDuration(); ok {
+		_spec.SetField(subscription.FieldCommitmentDuration, field.TypeString, value)
+	}
+	if _u.mutation.CommitmentDurationCleared() {
+		_spec.ClearField(subscription.FieldCommitmentDuration, field.TypeString)
+	}
 	if value, ok := _u.mutation.OverageFactor(); ok {
 		_spec.SetField(subscription.FieldOverageFactor, field.TypeOther, value)
 	}
@@ -2079,6 +2466,33 @@ func (_u *SubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *Subscripti
 	}
 	if value, ok := _u.mutation.EnableTrueUp(); ok {
 		_spec.SetField(subscription.FieldEnableTrueUp, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.ParentSubscriptionID(); ok {
+		_spec.SetField(subscription.FieldParentSubscriptionID, field.TypeString, value)
+	}
+	if _u.mutation.ParentSubscriptionIDCleared() {
+		_spec.ClearField(subscription.FieldParentSubscriptionID, field.TypeString)
+	}
+	if value, ok := _u.mutation.PaymentTerms(); ok {
+		_spec.SetField(subscription.FieldPaymentTerms, field.TypeString, value)
+	}
+	if _u.mutation.PaymentTermsCleared() {
+		_spec.ClearField(subscription.FieldPaymentTerms, field.TypeString)
+	}
+	if value, ok := _u.mutation.SubscriptionType(); ok {
+		_spec.SetField(subscription.FieldSubscriptionType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.AutoInvoiceThreshold(); ok {
+		_spec.SetField(subscription.FieldAutoInvoiceThreshold, field.TypeOther, value)
+	}
+	if _u.mutation.AutoInvoiceThresholdCleared() {
+		_spec.ClearField(subscription.FieldAutoInvoiceThreshold, field.TypeOther)
+	}
+	if value, ok := _u.mutation.SyncedPriceSequence(); ok {
+		_spec.SetField(subscription.FieldSyncedPriceSequence, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSyncedPriceSequence(); ok {
+		_spec.AddField(subscription.FieldSyncedPriceSequence, field.TypeInt64, value)
 	}
 	if _u.mutation.LineItemsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -2208,6 +2622,51 @@ func (_u *SubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *Subscripti
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(subscriptionphase.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SchedulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSchedulesIDs(); len(nodes) > 0 && !_u.mutation.SchedulesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SchedulesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   subscription.SchedulesTable,
+			Columns: []string{subscription.SchedulesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(subscriptionschedule.FieldID, field.TypeString),
 			},
 		}
 		for _, k := range nodes {

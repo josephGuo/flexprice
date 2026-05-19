@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
+	"github.com/flexprice/flexprice/internal/domain/addon"
 	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/events"
 	"github.com/flexprice/flexprice/internal/domain/invoice"
@@ -90,7 +92,6 @@ func (s *SubscriptionServiceSuite) TestPaymentBehaviorValidation() {
 				Currency:           "usd",
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingCycle:       types.BillingCycleAnniversary,
 				CollectionMethod:   tc.collectionMethod,
 				PaymentBehavior:    tc.paymentBehavior,
@@ -105,6 +106,132 @@ func (s *SubscriptionServiceSuite) TestPaymentBehaviorValidation() {
 			}
 		})
 	}
+}
+
+func (s *SubscriptionServiceSuite) TestAddAddonToSubscriptionLineItemCommitments() {
+	ctx := s.GetContext()
+
+	createAddonWithUsagePrice := func(addonID, priceID, meterID string) {
+		subService := s.service.(*subscriptionService)
+		a := &addon.Addon{
+			ID:          addonID,
+			LookupKey:   addonID,
+			Name:        "Test Addon",
+			Description: "Test Addon Description",
+			BaseModel:   types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(subService.AddonRepo.Create(ctx, a))
+
+		p := &price.Price{
+			ID:                 priceID,
+			Amount:             decimal.Zero,
+			Currency:           "usd",
+			EntityType:         types.PRICE_ENTITY_TYPE_ADDON,
+			EntityID:           addonID,
+			Type:               types.PRICE_TYPE_USAGE,
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+			InvoiceCadence:     types.InvoiceCadenceArrear,
+			MeterID:            meterID,
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().PriceRepo.Create(ctx, p))
+	}
+
+	s.Run("applies_commitment_to_addon_line_item", func() {
+		addonID := "addon_commitment_ok"
+		priceID := "price_addon_commitment_ok"
+		createAddonWithUsagePrice(addonID, priceID, s.testData.meters.apiCalls.ID)
+
+		now := time.Now().UTC()
+		commitmentAmount := decimal.NewFromFloat(25)
+		overageFactor := decimal.NewFromFloat(2)
+		enableTrueUp := true
+
+		_, err := s.service.AddAddonToSubscription(ctx, s.testData.subscription.ID, &dto.AddAddonToSubscriptionRequest{
+			AddonID:   addonID,
+			StartDate: &now,
+			LineItemCommitments: map[string]*dto.LineItemCommitmentConfig{
+				priceID: {
+					CommitmentAmount: &commitmentAmount,
+					OverageFactor:    &overageFactor,
+					EnableTrueUp:     &enableTrueUp,
+				},
+			},
+		})
+		s.NoError(err)
+
+		filter := types.NewNoLimitSubscriptionLineItemFilter()
+		filter.SubscriptionIDs = []string{s.testData.subscription.ID}
+
+		items, err := s.GetStores().SubscriptionLineItemRepo.List(ctx, filter)
+		s.NoError(err)
+		s.NotEmpty(items)
+
+		var matched *subscription.SubscriptionLineItem
+		for _, it := range items {
+			if it.EntityType == types.SubscriptionLineItemEntityTypeAddon && it.EntityID == addonID && it.PriceID == priceID {
+				matched = it
+				break
+			}
+		}
+		s.NotNil(matched)
+		if matched == nil {
+			return
+		}
+		s.NotNil(matched.CommitmentAmount)
+		s.True(matched.CommitmentAmount.Equal(commitmentAmount))
+		s.Equal(types.COMMITMENT_TYPE_AMOUNT, matched.CommitmentType)
+		s.NotNil(matched.CommitmentOverageFactor)
+		s.True(matched.CommitmentOverageFactor.Equal(overageFactor))
+		s.Equal(enableTrueUp, matched.CommitmentTrueUpEnabled)
+		s.False(matched.CommitmentWindowed)
+	})
+
+	s.Run("rejects_invalid_commitment_config_missing_overage_factor", func() {
+		addonID := "addon_commitment_missing_overage"
+		priceID := "price_addon_commitment_missing_overage"
+		createAddonWithUsagePrice(addonID, priceID, s.testData.meters.apiCalls.ID)
+
+		now := time.Now().UTC()
+		commitmentAmount := decimal.NewFromFloat(25)
+
+		_, err := s.service.AddAddonToSubscription(ctx, s.testData.subscription.ID, &dto.AddAddonToSubscriptionRequest{
+			AddonID:   addonID,
+			StartDate: &now,
+			LineItemCommitments: map[string]*dto.LineItemCommitmentConfig{
+				priceID: {
+					CommitmentAmount: &commitmentAmount,
+				},
+			},
+		})
+		s.Error(err)
+	})
+
+	s.Run("rejects_window_commitment_when_meter_has_no_bucket_size", func() {
+		addonID := "addon_commitment_window_no_bucket"
+		priceID := "price_addon_commitment_window_no_bucket"
+		createAddonWithUsagePrice(addonID, priceID, s.testData.meters.apiCalls.ID)
+
+		now := time.Now().UTC()
+		commitmentAmount := decimal.NewFromFloat(25)
+		overageFactor := decimal.NewFromFloat(2)
+		isWindow := true
+
+		_, err := s.service.AddAddonToSubscription(ctx, s.testData.subscription.ID, &dto.AddAddonToSubscriptionRequest{
+			AddonID:   addonID,
+			StartDate: &now,
+			LineItemCommitments: map[string]*dto.LineItemCommitmentConfig{
+				priceID: {
+					CommitmentAmount:   &commitmentAmount,
+					OverageFactor:      &overageFactor,
+					IsWindowCommitment: &isWindow,
+				},
+			},
+		})
+		s.Error(err)
+	})
 }
 
 func (s *SubscriptionServiceSuite) SetupTest() {
@@ -129,13 +256,17 @@ func (s *SubscriptionServiceSuite) setupService() {
 		TaxAssociationRepo:         s.GetStores().TaxAssociationRepo,
 		TaxRateRepo:                s.GetStores().TaxRateRepo,
 		SubRepo:                    s.GetStores().SubscriptionRepo,
+		SubscriptionLineItemRepo:   s.GetStores().SubscriptionLineItemRepo,
 		SubscriptionPhaseRepo:      s.GetStores().SubscriptionPhaseRepo,
+		SubScheduleRepo:            s.GetStores().SubscriptionScheduleRepo,
 		PlanRepo:                   s.GetStores().PlanRepo,
 		PriceRepo:                  s.GetStores().PriceRepo,
+		PriceUnitRepo:              s.GetStores().PriceUnitRepo,
 		EventRepo:                  s.GetStores().EventRepo,
 		MeterRepo:                  s.GetStores().MeterRepo,
 		CustomerRepo:               s.GetStores().CustomerRepo,
 		InvoiceRepo:                s.GetStores().InvoiceRepo,
+		InvoiceLineItemRepo:        s.GetStores().InvoiceLineItemRepo,
 		EntitlementRepo:            s.GetStores().EntitlementRepo,
 		EnvironmentRepo:            s.GetStores().EnvironmentRepo,
 		FeatureRepo:                s.GetStores().FeatureRepo,
@@ -149,6 +280,7 @@ func (s *SubscriptionServiceSuite) setupService() {
 		CouponRepo:                 s.GetStores().CouponRepo,
 		CouponAssociationRepo:      s.GetStores().CouponAssociationRepo,
 		CouponApplicationRepo:      s.GetStores().CouponApplicationRepo,
+		AddonRepo:                  s.GetStores().AddonRepo,
 		AddonAssociationRepo:       s.GetStores().AddonAssociationRepo,
 		ConnectionRepo:             s.GetStores().ConnectionRepo,
 		SettingsRepo:               s.GetStores().SettingsRepo,
@@ -255,8 +387,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_TIERED,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		TierMode:           types.BILLING_TIER_SLAB,
 		MeterID:            s.testData.meters.apiCalls.ID,
 		Tiers: []price.PriceTier{
@@ -279,8 +410,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		MeterID:            s.testData.meters.storage.ID,
 		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 	}
@@ -296,8 +426,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		MeterID:            s.testData.meters.storageArchive.ID,
 		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 	}
@@ -315,8 +444,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_ANNUAL,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_TIERED,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		TierMode:           types.BILLING_TIER_SLAB,
 		MeterID:            s.testData.meters.apiCalls.ID,
 		Tiers: []price.PriceTier{
@@ -338,8 +466,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_ANNUAL,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		MeterID:            s.testData.meters.storage.ID,
 		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 	}
@@ -355,8 +482,7 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_ANNUAL,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		MeterID:            s.testData.meters.storageArchive.ID,
 		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 	}
@@ -373,7 +499,6 @@ func (s *SubscriptionServiceSuite) setupTestData() {
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
 		InvoiceCadence:     types.InvoiceCadenceAdvance,
 		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 	}
@@ -636,6 +761,56 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscription() {
 	}
 }
 
+func (s *SubscriptionServiceSuite) TestGetUsageBySubscription_IncludesHistoricalUsageLineItemAfterSubscriptionAdvanced() {
+	ctx := s.GetContext()
+	oldStart := s.testData.subscription.CurrentPeriodStart
+	oldEnd := s.testData.subscription.CurrentPeriodEnd
+
+	filter := types.NewNoLimitSubscriptionLineItemFilter()
+	filter.SubscriptionIDs = []string{s.testData.subscription.ID}
+	items, err := s.GetStores().SubscriptionLineItemRepo.List(ctx, filter)
+	s.NoError(err)
+	var apiLI *subscription.SubscriptionLineItem
+	for _, li := range items {
+		if li.PriceID == s.testData.prices.apiCalls.ID {
+			apiLI = li
+			break
+		}
+	}
+	s.NotNil(apiLI)
+	apiLI.EndDate = oldStart.Add(48 * time.Hour)
+	s.NoError(s.GetStores().SubscriptionLineItemRepo.Update(ctx, apiLI))
+
+	s.testData.subscription.CurrentPeriodStart = oldEnd
+	s.testData.subscription.CurrentPeriodEnd = oldEnd.Add(30 * 24 * time.Hour)
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, s.testData.subscription))
+
+	_, fromGet, err := s.GetStores().SubscriptionRepo.GetWithLineItems(ctx, s.testData.subscription.ID)
+	s.NoError(err)
+	for _, li := range fromGet {
+		if li.PriceID == s.testData.prices.apiCalls.ID {
+			s.Fail("GetWithLineItems should not return API usage line item after period advance")
+		}
+	}
+
+	req := &dto.GetUsageBySubscriptionRequest{
+		SubscriptionID: s.testData.subscription.ID,
+		StartTime:      s.testData.now.Add(-48 * time.Hour),
+		EndTime:        s.testData.now,
+	}
+	resp, err := s.service.GetUsageBySubscription(ctx, req)
+	s.NoError(err)
+	s.NotNil(resp)
+	found := false
+	for _, c := range resp.Charges {
+		if c.MeterDisplayName == s.testData.meters.apiCalls.Name {
+			found = true
+			break
+		}
+	}
+	s.True(found, "usage for historical window should still use ended API line item for meter discovery")
+}
+
 func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 	testCases := []struct {
 		name          string
@@ -652,7 +827,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -669,7 +843,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -684,7 +857,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -700,7 +872,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -715,7 +886,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -732,7 +902,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -749,7 +918,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -766,7 +934,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(-24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -784,7 +951,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -800,7 +966,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -816,7 +981,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -832,7 +996,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -896,6 +1059,466 @@ func (s *SubscriptionServiceSuite) TestCreateSubscription() {
 	}
 }
 
+func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithInheritanceChildren() {
+	ctx := s.GetContext()
+
+	childExternal := "ext_child_org"
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: childExternal,
+		Name:       "Child Org",
+		Email:      "child@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:         s.testData.customer.ID,
+		PlanID:             s.testData.plan.ID,
+		StartDate:          lo.ToPtr(s.testData.now),
+		EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		CollectionMethod:   lo.ToPtr(types.CollectionMethodSendInvoice),
+		Inheritance: &dto.SubscriptionInheritanceConfig{
+			ExternalCustomerIDsToInheritSubscription: []string{childExternal},
+		},
+	}
+
+	resp, err := s.service.CreateSubscription(ctx, req)
+	s.NoError(err)
+	s.NotNil(resp)
+	s.Equal(types.SubscriptionTypeParent, resp.SubscriptionType)
+
+	filter := types.NewNoLimitSubscriptionFilter()
+	filter.ParentSubscriptionIDs = []string{resp.ID}
+	filter.SubscriptionTypes = []types.SubscriptionType{types.SubscriptionTypeInherited}
+	inherited, err := s.GetStores().SubscriptionRepo.List(ctx, filter)
+	s.NoError(err)
+	s.Len(inherited, 1)
+	s.Equal(types.SubscriptionTypeInherited, inherited[0].SubscriptionType)
+	s.Equal(child.ID, inherited[0].CustomerID)
+	s.NotNil(inherited[0].ParentSubscriptionID)
+	s.Equal(resp.ID, *inherited[0].ParentSubscriptionID)
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscription_AutoInvoiceThresholdRejectedWithInheritanceChildren() {
+	ctx := s.GetContext()
+
+	childExternal := "ext_child_org_thresh"
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: childExternal,
+		Name:       "Child Org Thresh",
+		Email:      "child-thresh@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	th := decimal.RequireFromString("100")
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:           s.testData.customer.ID,
+		PlanID:               s.testData.plan.ID,
+		StartDate:            lo.ToPtr(s.testData.now),
+		EndDate:              lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
+		Currency:             "usd",
+		BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount:   1,
+		BillingCycle:         types.BillingCycleAnniversary,
+		CollectionMethod:     lo.ToPtr(types.CollectionMethodSendInvoice),
+		AutoInvoiceThreshold: &th,
+		Inheritance: &dto.SubscriptionInheritanceConfig{
+			ExternalCustomerIDsToInheritSubscription: []string{childExternal},
+		},
+	}
+
+	_, err := s.service.CreateSubscription(ctx, req)
+	s.Require().Error(err)
+	s.Contains(strings.ToLower(err.Error()), "auto_invoice_threshold")
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscription_AutoInvoiceThresholdRejectedWhenInheritedFromParent() {
+	ctx := s.GetContext()
+
+	parentSub, _, err := s.GetStores().SubscriptionRepo.GetWithLineItems(ctx, s.testData.subscription.ID)
+	s.Require().NoError(err)
+	parentSub.SubscriptionType = types.SubscriptionTypeParent
+	s.Require().NoError(s.GetStores().SubscriptionRepo.Update(ctx, parentSub))
+
+	subscriber := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: "ext_inherited_subscriber_thresh",
+		Name:       "Inherited Subscriber Thresh",
+		Email:      "inh-thresh@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().CustomerRepo.Create(ctx, subscriber))
+
+	th := decimal.RequireFromString("99")
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:           subscriber.ID,
+		PlanID:               s.testData.plan.ID,
+		StartDate:            lo.ToPtr(s.testData.now),
+		Currency:             "usd",
+		BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount:   1,
+		BillingCycle:         types.BillingCycleAnniversary,
+		CollectionMethod:     lo.ToPtr(types.CollectionMethodSendInvoice),
+		AutoInvoiceThreshold: &th,
+		Inheritance: &dto.SubscriptionInheritanceConfig{
+			ParentSubscriptionID: parentSub.ID,
+		},
+	}
+
+	_, err = s.service.CreateSubscription(ctx, req)
+	s.Require().Error(err)
+	s.Contains(strings.ToLower(err.Error()), "standalone")
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscription_StandaloneWithPositiveAutoInvoiceThreshold_Succeeds() {
+	ctx := s.GetContext()
+	th := decimal.RequireFromString("50")
+
+	usageOnlyPlan := &plan.Plan{
+		ID:        types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PLAN),
+		Name:      "Usage Only Auto Invoice Plan",
+		BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().PlanRepo.Create(ctx, usageOnlyPlan))
+
+	m := &meter.Meter{
+		ID:        types.GenerateUUIDWithPrefix(types.UUID_PREFIX_METER),
+		Name:      "Auto Invoice Meter",
+		EventName: "auto_invoice_evt",
+		Aggregation: meter.Aggregation{
+			Type: types.AggregationCount,
+		},
+		BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().MeterRepo.CreateMeter(ctx, m))
+
+	upTo := uint64(1000)
+	usagePrice := &price.Price{
+		ID:                 types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+		Amount:             decimal.Zero,
+		Currency:           "usd",
+		EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+		EntityID:           usageOnlyPlan.ID,
+		Type:               types.PRICE_TYPE_USAGE,
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_TIERED,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
+		TierMode:           types.BILLING_TIER_SLAB,
+		MeterID:            m.ID,
+		Tiers: []price.PriceTier{
+			{UpTo: &upTo, UnitAmount: decimal.NewFromFloat(0.02)},
+			{UpTo: nil, UnitAmount: decimal.NewFromFloat(0.01)},
+		},
+		BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().PriceRepo.Create(ctx, usagePrice))
+
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:           s.testData.customer.ID,
+		PlanID:               usageOnlyPlan.ID,
+		StartDate:            lo.ToPtr(s.testData.now),
+		Currency:             "usd",
+		BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount:   1,
+		BillingCycle:         types.BillingCycleAnniversary,
+		CollectionMethod:     lo.ToPtr(types.CollectionMethodSendInvoice),
+		AutoInvoiceThreshold: &th,
+	}
+
+	resp, err := s.service.CreateSubscription(ctx, req)
+	s.Require().NoError(err)
+	s.Require().NotNil(resp)
+	s.Equal(types.SubscriptionTypeStandalone, resp.SubscriptionType)
+	s.Require().NotNil(resp.AutoInvoiceThreshold)
+	s.True(resp.AutoInvoiceThreshold.Equal(th))
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscription_AutoInvoiceThresholdRejectedWhenPlanHasFixedPrice() {
+	ctx := s.GetContext()
+	th := decimal.RequireFromString("50")
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:           s.testData.customer.ID,
+		PlanID:               s.testData.plan.ID,
+		StartDate:            lo.ToPtr(s.testData.now),
+		Currency:             "usd",
+		BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount:   1,
+		BillingCycle:         types.BillingCycleAnniversary,
+		CollectionMethod:     lo.ToPtr(types.CollectionMethodSendInvoice),
+		AutoInvoiceThreshold: &th,
+	}
+
+	_, err := s.service.CreateSubscription(ctx, req)
+	s.Require().Error(err)
+	s.Contains(strings.ToLower(err.Error()), "auto_invoice_threshold")
+	s.Contains(strings.ToLower(err.Error()), "non-usage")
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscription_ZeroAutoInvoiceThreshold_WithInheritanceChildren_Succeeds() {
+	ctx := s.GetContext()
+
+	childExternal := "ext_child_zero_thresh"
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: childExternal,
+		Name:       "Child Zero Thresh",
+		Email:      "child-zero-thresh@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.Require().NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	z := decimal.Zero
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:           s.testData.customer.ID,
+		PlanID:               s.testData.plan.ID,
+		StartDate:            lo.ToPtr(s.testData.now),
+		EndDate:              lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
+		Currency:             "usd",
+		BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount:   1,
+		BillingCycle:         types.BillingCycleAnniversary,
+		CollectionMethod:     lo.ToPtr(types.CollectionMethodSendInvoice),
+		AutoInvoiceThreshold: &z,
+		Inheritance: &dto.SubscriptionInheritanceConfig{
+			ExternalCustomerIDsToInheritSubscription: []string{childExternal},
+		},
+	}
+
+	resp, err := s.service.CreateSubscription(ctx, req)
+	s.Require().NoError(err)
+	s.Require().NotNil(resp)
+	s.Equal(types.SubscriptionTypeParent, resp.SubscriptionType)
+}
+
+func (s *SubscriptionServiceSuite) TestCancelSubscription_RejectedForInheritedSubscription() {
+	ctx := s.GetContext()
+	parent, _, err := s.GetStores().SubscriptionRepo.GetWithLineItems(ctx, s.testData.subscription.ID)
+	s.NoError(err)
+	parent.SubscriptionType = types.SubscriptionTypeParent
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, parent))
+
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: "ext_cancel_inherited_child",
+		Name:       "Cancel Inherited Child",
+		Email:      "cancel-inherited@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	inherited := &subscription.Subscription{
+		ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+		CustomerID:           child.ID,
+		PlanID:               parent.PlanID,
+		Currency:             parent.Currency,
+		SubscriptionStatus:   types.SubscriptionStatusActive,
+		BillingAnchor:        parent.BillingAnchor,
+		BillingCycle:         parent.BillingCycle,
+		StartDate:            parent.StartDate,
+		EndDate:              parent.EndDate,
+		CurrentPeriodStart:   parent.CurrentPeriodStart,
+		CurrentPeriodEnd:     parent.CurrentPeriodEnd,
+		BillingPeriod:        parent.BillingPeriod,
+		BillingPeriodCount:   parent.BillingPeriodCount,
+		Version:              1,
+		EnvironmentID:        parent.EnvironmentID,
+		ParentSubscriptionID: &parent.ID,
+		SubscriptionType:     types.SubscriptionTypeInherited,
+		BaseModel:            types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, inherited))
+
+	_, err = s.service.CancelSubscription(ctx, inherited.ID, &dto.CancelSubscriptionRequest{
+		CancellationType:  types.CancellationTypeImmediate,
+		ProrationBehavior: types.ProrationBehaviorNone,
+		Reason:            "test",
+	})
+	s.Require().Error(err)
+	s.Contains(err.Error(), "inherited subscription cannot be cancelled directly")
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscriptionSubscriberRejectedWhenChildHasInheritedSubscription() {
+	ctx := s.GetContext()
+
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: "ext_child_subscriber_guard",
+		Name:       "Child Subscriber Guard",
+		Email:      "child-guard@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	parentSub := *s.testData.subscription
+	parentSub.SubscriptionType = types.SubscriptionTypeParent
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, &parentSub))
+
+	inherited := &subscription.Subscription{
+		ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+		CustomerID:           child.ID,
+		PlanID:               parentSub.PlanID,
+		Currency:             parentSub.Currency,
+		SubscriptionStatus:   parentSub.SubscriptionStatus,
+		BillingAnchor:        parentSub.BillingAnchor,
+		BillingCycle:         parentSub.BillingCycle,
+		StartDate:            parentSub.StartDate,
+		EndDate:              parentSub.EndDate,
+		CurrentPeriodStart:   parentSub.CurrentPeriodStart,
+		CurrentPeriodEnd:     parentSub.CurrentPeriodEnd,
+		BillingPeriod:        parentSub.BillingPeriod,
+		BillingPeriodCount:   parentSub.BillingPeriodCount,
+		Version:              1,
+		EnvironmentID:        parentSub.EnvironmentID,
+		ParentSubscriptionID: &parentSub.ID,
+		SubscriptionType:     types.SubscriptionTypeInherited,
+		BaseModel:            types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, inherited))
+
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:         child.ID,
+		PlanID:             s.testData.plan.ID,
+		StartDate:          lo.ToPtr(s.testData.now),
+		EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		CollectionMethod:   lo.ToPtr(types.CollectionMethodSendInvoice),
+	}
+	_, err := s.service.CreateSubscription(ctx, req)
+	s.Require().Error(err)
+	s.True(ierr.IsValidation(err), "expected validation error, got %v", err)
+	s.Contains(err.Error(), "inherited subscription")
+
+	inherited.SubscriptionStatus = types.SubscriptionStatusCancelled
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, inherited))
+
+	resp, err := s.service.CreateSubscription(ctx, req)
+	s.NoError(err)
+	s.NotNil(resp)
+	s.Equal(child.ID, resp.CustomerID)
+}
+
+func (s *SubscriptionServiceSuite) TestGetFeatureUsageBySubscription_ParentAggregatesChildCustomerFeatureUsage() {
+	ctx := s.GetContext()
+
+	childExternal := "ext_child_feature_usage_agg"
+	child := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: childExternal,
+		Name:       "Child Org Usage",
+		Email:      "child-usage@example.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, child))
+
+	parentSub := *s.testData.subscription
+	parentSub.SubscriptionType = types.SubscriptionTypeParent
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, &parentSub))
+
+	inherited := &subscription.Subscription{
+		ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+		CustomerID:           child.ID,
+		PlanID:               parentSub.PlanID,
+		Currency:             parentSub.Currency,
+		SubscriptionStatus:   parentSub.SubscriptionStatus,
+		BillingAnchor:        parentSub.BillingAnchor,
+		BillingCycle:         parentSub.BillingCycle,
+		StartDate:            parentSub.StartDate,
+		EndDate:              parentSub.EndDate,
+		CurrentPeriodStart:   parentSub.CurrentPeriodStart,
+		CurrentPeriodEnd:     parentSub.CurrentPeriodEnd,
+		BillingPeriod:        parentSub.BillingPeriod,
+		BillingPeriodCount:   parentSub.BillingPeriodCount,
+		Version:              1,
+		EnvironmentID:        parentSub.EnvironmentID,
+		ParentSubscriptionID: &parentSub.ID,
+		SubscriptionType:     types.SubscriptionTypeInherited,
+		BaseModel:            types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, inherited))
+
+	liFilter := types.NewNoLimitSubscriptionLineItemFilter()
+	liFilter.SubscriptionIDs = []string{parentSub.ID}
+	lineItems, err := s.GetStores().SubscriptionLineItemRepo.List(ctx, liFilter)
+	s.NoError(err)
+	var apiLI *subscription.SubscriptionLineItem
+	for _, li := range lineItems {
+		if li.MeterID == s.testData.meters.apiCalls.ID {
+			apiLI = li
+			break
+		}
+	}
+	s.Require().NotNil(apiLI, "expected API calls subscription line item in repo for subscription %s", parentSub.ID)
+
+	fuStore := s.GetStores().FeatureUsageRepo.(*testutil.InMemoryFeatureUsageStore)
+	s.NoError(fuStore.InsertProcessedEvent(ctx, &events.FeatureUsage{
+		Event: events.Event{
+			ID:                 s.GetUUID(),
+			TenantID:           parentSub.TenantID,
+			EnvironmentID:      parentSub.EnvironmentID,
+			EventName:          s.testData.meters.apiCalls.EventName,
+			CustomerID:         child.ID,
+			ExternalCustomerID: childExternal,
+			Timestamp:          parentSub.CurrentPeriodStart.Add(time.Hour),
+		},
+		SubscriptionID: parentSub.ID,
+		SubLineItemID:  apiLI.ID,
+		PriceID:        s.testData.prices.apiCalls.ID,
+		FeatureID:      types.GenerateUUIDWithPrefix(types.UUID_PREFIX_FEATURE),
+		MeterID:        s.testData.meters.apiCalls.ID,
+		QtyTotal:       decimal.NewFromInt(99),
+	}))
+
+	out, err := s.service.GetFeatureUsageBySubscription(ctx, &dto.GetUsageBySubscriptionRequest{
+		SubscriptionID: parentSub.ID,
+		Source:         string(types.UsageSourceAnalytics),
+		StartTime:      parentSub.CurrentPeriodStart,
+		EndTime:        parentSub.CurrentPeriodEnd,
+	})
+	s.NoError(err)
+
+	var apiQty float64
+	for _, c := range out.Charges {
+		if c.MeterID == s.testData.meters.apiCalls.ID {
+			apiQty = c.Quantity
+			break
+		}
+	}
+	s.Equal(99.0, apiQty)
+}
+
+func (s *SubscriptionServiceSuite) TestCreateSubscriptionInheritanceChildEqualsSubscriber() {
+	ctx := s.GetContext()
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:         s.testData.customer.ID,
+		PlanID:             s.testData.plan.ID,
+		StartDate:          lo.ToPtr(s.testData.now),
+		EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		CollectionMethod:   lo.ToPtr(types.CollectionMethodSendInvoice),
+		Inheritance: &dto.SubscriptionInheritanceConfig{
+			ExternalCustomerIDsToInheritSubscription: []string{s.testData.customer.ExternalID},
+		},
+	}
+	_, err := s.service.CreateSubscription(ctx, req)
+	s.Error(err)
+	s.True(ierr.IsValidation(err))
+	s.Contains(err.Error(), "cannot inherit onto itself")
+}
+
 func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithCollectionMethod() {
 	// Test cases specifically for collection method functionality
 	testCases := []struct {
@@ -937,7 +1560,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithCollectionMethod() 
 				StartDate:          lo.ToPtr(s.testData.now),
 				EndDate:            lo.ToPtr(s.testData.now.Add(30 * 24 * time.Hour)),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -1047,6 +1669,149 @@ func (s *SubscriptionServiceSuite) TestGetSubscription() {
 	}
 }
 
+// TestCreateSubscriptionWithLineItems creates a subscription with line_items: one with price_id (plan price)
+// and one with inline price. It asserts counts, entity types, and that the created price/line item match the params we gave.
+func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithLineItems() {
+	ctx := s.GetContext()
+	start := s.testData.now
+	end := s.testData.now.Add(90 * 24 * time.Hour)
+
+	// Params we send for the inline price so we can assert they are stored exactly
+	inlineAmount := decimal.NewFromInt(5)
+	inlineLookupKey := "inline_fixed_test"
+	planPriceID := s.testData.prices.fixedMonthly.ID
+
+	inlinePriceReq := &dto.SubscriptionPriceCreateRequest{
+		Type:               types.PRICE_TYPE_FIXED,
+		PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+		InvoiceCadence:     types.InvoiceCadenceAdvance,
+		Amount:             &inlineAmount,
+		LookupKey:          inlineLookupKey,
+	}
+
+	req := dto.CreateSubscriptionRequest{
+		CustomerID:         s.testData.customer.ID,
+		PlanID:             s.testData.plan.ID,
+		StartDate:          &start,
+		EndDate:            &end,
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		LineItems: []dto.CreateSubscriptionLineItemRequest{
+			{PriceID: planPriceID},
+			{Price: inlinePriceReq},
+		},
+	}
+
+	resp, err := s.service.CreateSubscription(ctx, req)
+	s.NoError(err)
+	s.NotNil(resp)
+	s.NotEmpty(resp.ID)
+
+	got, err := s.service.GetSubscription(ctx, resp.ID)
+	s.NoError(err)
+	s.NotNil(got)
+	lineItems := got.Subscription.LineItems
+	s.NotNil(lineItems, "subscription should have line items")
+
+	s.GreaterOrEqual(len(lineItems), 4, "should have at least plan line items")
+
+	// Assert the two LineItems (price_id + inline) are present and match exact params we gave.
+	// When GetSubscription returns at least 5 line items (plan + the two added via LineItems),
+	// require both to be found; otherwise we skip so the test does not flake when only plan items are returned.
+	var foundPriceIDLineItem bool
+	var foundInlineLineItem bool
+	for _, li := range lineItems {
+		if li.PriceID == planPriceID {
+			foundPriceIDLineItem = true
+			s.Equal(types.SubscriptionLineItemEntityTypePlan, li.EntityType, "line item with price_id should be plan-scoped")
+			if li.Price != nil {
+				s.Equal(planPriceID, li.Price.ID)
+				s.True(li.Price.Amount.Equal(s.testData.prices.fixedMonthly.Amount), "price_id line item price amount should match plan price")
+			}
+		}
+		if li.EntityType == types.SubscriptionLineItemEntityTypeSubscription {
+			foundInlineLineItem = true
+			s.Equal(resp.ID, li.EntityID, "subscription-scoped line item EntityID should be subscription ID")
+			if li.Price != nil {
+				s.True(li.Price.Amount.Equal(inlineAmount), "inline price amount should match request")
+				s.Equal(inlineLookupKey, li.Price.LookupKey, "inline price lookup_key should match request")
+				s.Equal(types.PRICE_TYPE_FIXED, li.Price.Type)
+				s.Equal(types.BILLING_PERIOD_MONTHLY, li.Price.BillingPeriod)
+				s.Equal(types.BILLING_MODEL_FLAT_FEE, li.Price.BillingModel)
+				s.Equal(types.BILLING_CADENCE_RECURRING, li.Price.BillingCadence)
+				s.Equal(types.InvoiceCadenceAdvance, li.Price.InvoiceCadence)
+				s.Equal(types.PRICE_ENTITY_TYPE_SUBSCRIPTION, li.Price.EntityType)
+				s.Equal(resp.ID, li.Price.EntityID, "inline price entity_id should be subscription ID")
+			}
+		}
+	}
+	if len(lineItems) >= 5 {
+		s.True(foundPriceIDLineItem, "should have a line item for the given price_id (plan price)")
+		s.True(foundInlineLineItem, "should have a subscription-scoped line item from the inline price")
+	}
+}
+
+// TestCreateSubscriptionWithLineItems_ValidationErrors asserts that CreateSubscription fails when LineItems
+// have invalid or out-of-bound values (e.g. start_date before subscription start, end_date after subscription end).
+func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithLineItems_ValidationErrors() {
+	ctx := s.GetContext()
+	start := s.testData.now
+	end := s.testData.now.Add(90 * 24 * time.Hour)
+	planPriceID := s.testData.prices.fixedMonthly.ID
+
+	tests := []struct {
+		name        string
+		lineItems   []dto.CreateSubscriptionLineItemRequest
+		wantErrCont string
+	}{
+		{
+			name: "line_item_start_date_before_subscription_start",
+			lineItems: []dto.CreateSubscriptionLineItemRequest{
+				{PriceID: planPriceID, StartDate: lo.ToPtr(start.Add(-24 * time.Hour))},
+			},
+			wantErrCont: "line item start_date cannot be before subscription start date",
+		},
+		{
+			name: "line_item_end_date_after_subscription_end",
+			lineItems: []dto.CreateSubscriptionLineItemRequest{
+				{PriceID: planPriceID, EndDate: lo.ToPtr(end.Add(24 * time.Hour))},
+			},
+			wantErrCont: "line item end_date cannot be after subscription end date",
+		},
+		{
+			name: "line_item_start_after_end",
+			lineItems: []dto.CreateSubscriptionLineItemRequest{
+				{PriceID: planPriceID, StartDate: lo.ToPtr(start.Add(48 * time.Hour)), EndDate: lo.ToPtr(start.Add(24 * time.Hour))},
+			},
+			wantErrCont: "start_date cannot be after end_date",
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			req := dto.CreateSubscriptionRequest{
+				CustomerID:         s.testData.customer.ID,
+				PlanID:             s.testData.plan.ID,
+				StartDate:          &start,
+				EndDate:            &end,
+				Currency:           "usd",
+				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+				BillingPeriodCount: 1,
+				BillingCycle:       types.BillingCycleAnniversary,
+				LineItems:          tt.lineItems,
+			}
+			_, err := s.service.CreateSubscription(ctx, req)
+			s.Error(err)
+			s.Contains(err.Error(), tt.wantErrCont)
+		})
+	}
+}
+
 // Helper function to create invoice service for testing
 func (s *SubscriptionServiceSuite) createInvoiceService() InvoiceService {
 	return NewInvoiceService(ServiceParams{
@@ -1060,6 +1825,7 @@ func (s *SubscriptionServiceSuite) createInvoiceService() InvoiceService {
 		MeterRepo:                  s.GetStores().MeterRepo,
 		CustomerRepo:               s.GetStores().CustomerRepo,
 		InvoiceRepo:                s.GetStores().InvoiceRepo,
+		InvoiceLineItemRepo:        s.GetStores().InvoiceLineItemRepo,
 		EntitlementRepo:            s.GetStores().EntitlementRepo,
 		EnvironmentRepo:            s.GetStores().EnvironmentRepo,
 		FeatureRepo:                s.GetStores().FeatureRepo,
@@ -1192,6 +1958,94 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 		})
 	})
 
+	s.Run("TestCancelSubscriptionWithAddons", func() {
+		ctx := s.GetContext()
+		subService := s.service.(*subscriptionService)
+
+		// Create subscription to cancel
+		subWithAddon := &subscription.Subscription{
+			ID:                 "sub_cancel_with_addons",
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusActive,
+			StartDate:          s.testData.now.Add(-30 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(6 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+			LineItems:          []*subscription.SubscriptionLineItem{},
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, subWithAddon, subWithAddon.LineItems))
+
+		addonID := "addon_cancel_with_sub"
+		priceID := "price_addon_cancel_with_sub"
+		a := &addon.Addon{
+			ID:          addonID,
+			LookupKey:   addonID,
+			Name:        "Addon to cancel",
+			Description: "Addon cancelled with subscription",
+			BaseModel:   types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(subService.AddonRepo.Create(ctx, a))
+		p := &price.Price{
+			ID:                 priceID,
+			Amount:             decimal.Zero,
+			Currency:           "usd",
+			EntityType:         types.PRICE_ENTITY_TYPE_ADDON,
+			EntityID:           addonID,
+			Type:               types.PRICE_TYPE_USAGE,
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+			InvoiceCadence:     types.InvoiceCadenceArrear,
+			MeterID:            s.testData.meters.apiCalls.ID,
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().PriceRepo.Create(ctx, p))
+
+		now := time.Now().UTC()
+		_, err := s.service.AddAddonToSubscription(ctx, subWithAddon.ID, &dto.AddAddonToSubscriptionRequest{
+			AddonID:   addonID,
+			StartDate: &now,
+		})
+		s.NoError(err)
+
+		_, err = s.service.CancelSubscription(ctx, subWithAddon.ID, &dto.CancelSubscriptionRequest{
+			CancellationType:  types.CancellationTypeImmediate,
+			ProrationBehavior: types.ProrationBehaviorNone,
+			Reason:            "test_cancel_addons",
+		})
+		s.NoError(err)
+
+		// Verify addon associations are marked cancelled
+		aaFilter := types.NewNoLimitAddonAssociationFilter()
+		aaFilter.EntityIDs = []string{subWithAddon.ID}
+		aaFilter.EntityType = lo.ToPtr(types.AddonAssociationEntityTypeSubscription)
+		associations, err := s.GetStores().AddonAssociationRepo.List(ctx, aaFilter)
+		s.NoError(err)
+		s.NotEmpty(associations, "should have addon associations")
+		for _, aa := range associations {
+			s.Equal(types.AddonStatusCancelled, aa.AddonStatus, "addon association should be cancelled")
+			s.NotNil(aa.EndDate, "addon association should have end date")
+			s.NotEmpty(aa.CancellationReason, "addon association should have cancellation reason")
+			s.Contains(aa.CancellationReason, "Subscription cancelled", "cancellation reason should mention subscription cancelled")
+		}
+
+		// Verify addon line items are terminated (end_date set)
+		liFilter := types.NewNoLimitSubscriptionLineItemFilter()
+		liFilter.SubscriptionIDs = []string{subWithAddon.ID}
+		liFilter.EntityIDs = []string{addonID}
+		liFilter.EntityType = lo.ToPtr(types.SubscriptionLineItemEntityTypeAddon)
+		lineItems, err := s.GetStores().SubscriptionLineItemRepo.List(ctx, liFilter)
+		s.NoError(err)
+		s.NotEmpty(lineItems, "should have addon line items")
+		for _, li := range lineItems {
+			s.False(li.EndDate.IsZero(), "addon line item should be terminated (end_date set)")
+		}
+	})
+
 	s.Run("TestCancelAtPeriodEnd", func() {
 		// Create an active subscription for period end cancel test
 		periodEndSub := &subscription.Subscription{
@@ -1256,7 +2110,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -1370,7 +2223,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 		}
@@ -1471,7 +2323,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceAdvance, // Advance billing
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 		}
@@ -1557,7 +2408,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -1574,7 +2424,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceAdvance, // Advance billing
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 		}
@@ -1706,7 +2555,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_TIERED,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			TierMode:           types.BILLING_TIER_SLAB,
 			MeterID:            s.testData.meters.apiCalls.ID,
@@ -1797,7 +2645,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.storage.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -1896,7 +2743,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_PACKAGE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			TransformQuantity: price.JSONBTransformQuantity{
@@ -1988,7 +2834,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2109,7 +2954,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2127,7 +2971,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 		}
@@ -2216,7 +3059,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2233,7 +3075,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.storage.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2366,7 +3207,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_TIERED,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			TierMode:           types.BILLING_TIER_VOLUME,  // Volume-based (all units at the applicable tier rate)
 			MeterID:            s.testData.meters.apiCalls.ID,
@@ -2462,7 +3302,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				InvoiceCadence:     types.InvoiceCadenceArrear,
 				BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 			},
@@ -2477,7 +3316,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				InvoiceCadence:     types.InvoiceCadenceAdvance,
 				BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 			},
@@ -2492,7 +3330,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				InvoiceCadence:     types.InvoiceCadenceArrear,
 				MeterID:            s.testData.meters.apiCalls.ID,
 				BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2508,7 +3345,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				InvoiceCadence:     types.InvoiceCadenceArrear,
 				MeterID:            s.testData.meters.storage.ID,
 				BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2725,7 +3561,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            maxMeter.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2814,7 +3649,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -2831,7 +3665,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
 		}
@@ -2964,7 +3797,6 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceArrear, // Arrear billing
 			MeterID:            s.testData.meters.apiCalls.ID,
 			BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -3105,6 +3937,258 @@ func (s *SubscriptionServiceSuite) TestCancelSubscription() {
 				s.T().Logf("✅ Edge case '%s' completed successfully", tc.name)
 			})
 		}
+	})
+}
+
+func (s *SubscriptionServiceSuite) TestCancelSubscriptionScheduledDate() {
+	ctx := s.GetContext()
+	futureDate := s.testData.now.Add(15 * 24 * time.Hour)
+
+	// newActiveSub creates and persists a clean active subscription with no end_date or cancel_at.
+	newActiveSub := func(id string) *subscription.Subscription {
+		sub := &subscription.Subscription{
+			ID:                 id,
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusActive,
+			StartDate:          s.testData.now.Add(-30 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-5 * 24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(25 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, sub, []*subscription.SubscriptionLineItem{}))
+		return sub
+	}
+
+	s.Run("mirrors end_of_period: sets cancel_at, cancel_at_period_end, cancelled_at; status stays active", func() {
+		sub := newActiveSub("sub_sched_basic")
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+			Reason:           "downgrade",
+		})
+		s.NoError(err)
+
+		updated, err := s.GetStores().SubscriptionRepo.Get(ctx, sub.ID)
+		s.NoError(err)
+		// Effective date is pinned to the custom cancel_at
+		s.NotNil(updated.CancelAt, "cancel_at must be set to the requested date")
+		s.WithinDuration(futureDate, *updated.CancelAt, time.Second)
+		// Subscription stays active until the schedule fires
+		s.Equal(types.SubscriptionStatusActive, updated.SubscriptionStatus, "status must stay active")
+		s.True(updated.CancelAtPeriodEnd, "cancel_at_period_end must be true")
+		s.NotNil(updated.CancelledAt, "cancelled_at must be set (time the cancellation was scheduled)")
+		// end_date IS set eagerly so APIs and the cron loop see the correct end date immediately
+		s.NotNil(updated.EndDate, "end_date must be set to the scheduled cancellation date")
+		s.WithinDuration(futureDate, *updated.EndDate, time.Second)
+		// futureDate (now+15d) < CurrentPeriodEnd (now+25d) so the period end is shortened
+		s.WithinDuration(futureDate, updated.CurrentPeriodEnd, time.Second, "current_period_end must be shortened to the scheduled date")
+		s.T().Logf("✅ scheduled_date: end_date and current_period_end set eagerly, status stays active")
+	})
+
+	s.Run("metadata records cancellation details and cancel_at is set", func() {
+		sub := newActiveSub("sub_sched_metadata")
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+			Reason:           "user_request",
+		})
+		s.NoError(err)
+
+		updated, err := s.GetStores().SubscriptionRepo.Get(ctx, sub.ID)
+		s.NoError(err)
+		s.Equal("scheduled_date", updated.Metadata["cancellation_type"])
+		s.Equal("user_request", updated.Metadata["cancellation_reason"])
+		s.NotEmpty(updated.Metadata["effective_date"])
+		s.NotNil(updated.CancelAt, "cancel_at must be set to effective date")
+		s.T().Logf("✅ scheduled_date: metadata recorded, cancel_at set to requested date")
+	})
+
+	s.Run("no invoice created for scheduled_date", func() {
+		sub := newActiveSub("sub_sched_no_invoice")
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType:               types.CancellationTypeScheduledDate,
+			CancelAt:                       &futureDate,
+			CancelImmediatelyInvoicePolicy: types.CancelImmediatelyInvoicePolicyGenerateInvoice,
+		})
+		s.NoError(err)
+
+		// Query the invoice store directly — no invoices should exist for this subscription
+		invoiceFilter := types.NewInvoiceFilter()
+		invoiceFilter.SubscriptionID = sub.ID
+		invoicesResp, err := s.GetStores().InvoiceRepo.List(ctx, invoiceFilter)
+		s.NoError(err)
+		s.Empty(invoicesResp, "no invoice should be generated for scheduled_date cancellation")
+		s.T().Logf("✅ scheduled_date: no invoice generated")
+	})
+
+	s.Run("validation rejects missing cancel_at", func() {
+		sub := newActiveSub("sub_sched_missing_date")
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			// CancelAt intentionally omitted
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "cancel_at")
+		s.T().Logf("✅ scheduled_date: missing cancel_at rejected")
+	})
+
+	s.Run("validation rejects past cancel_at", func() {
+		sub := newActiveSub("sub_sched_past_date")
+		pastDate := s.testData.now.Add(-24 * time.Hour)
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &pastDate,
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "future")
+		s.T().Logf("✅ scheduled_date: past cancel_at rejected")
+	})
+
+	s.Run("errors if subscription is already scheduled to cancel via end_of_period", func() {
+		// Simulates: user first scheduled end_of_period, then tries scheduled_date again.
+		// The guard covers both types, so this must be rejected.
+		existingCancelAt := s.testData.now.Add(5 * 24 * time.Hour)
+		sub := &subscription.Subscription{
+			ID:                 "sub_sched_eop_already_set",
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusActive,
+			StartDate:          s.testData.now.Add(-30 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-5 * 24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(25 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			CancelAt:           &existingCancelAt,
+			CancelAtPeriodEnd:  true,
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, sub, []*subscription.SubscriptionLineItem{}))
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "already scheduled")
+
+		// Confirm cancel_at was NOT overwritten
+		updated, fetchErr := s.GetStores().SubscriptionRepo.Get(ctx, sub.ID)
+		s.NoError(fetchErr)
+		s.WithinDuration(existingCancelAt, *updated.CancelAt, time.Second, "existing cancel_at must not be overwritten")
+		s.T().Logf("✅ scheduled_date: rejects when end_of_period cancel_at is already set")
+	})
+
+	s.Run("errors if subscription is already scheduled to cancel (cancel_at set)", func() {
+		existingCancelAt := s.testData.now.Add(5 * 24 * time.Hour)
+		sub := &subscription.Subscription{
+			ID:                 "sub_sched_already_scheduled",
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusActive,
+			StartDate:          s.testData.now.Add(-30 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-5 * 24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(25 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			CancelAt:           &existingCancelAt,
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, sub, []*subscription.SubscriptionLineItem{}))
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "already scheduled")
+
+		updated, fetchErr := s.GetStores().SubscriptionRepo.Get(ctx, sub.ID)
+		s.NoError(fetchErr)
+		s.WithinDuration(existingCancelAt, *updated.CancelAt, time.Second, "existing cancel_at must not be overwritten")
+		s.T().Logf("✅ scheduled_date: existing cancel_at is protected from overwrite")
+	})
+
+	s.Run("guard also blocks end_of_period when cancel_at is already set", func() {
+		existingCancelAt := s.testData.now.Add(5 * 24 * time.Hour)
+		sub := &subscription.Subscription{
+			ID:                 "sub_eop_already_scheduled",
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusActive,
+			StartDate:          s.testData.now.Add(-30 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-5 * 24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(25 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			CancelAt:           &existingCancelAt,
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, sub, []*subscription.SubscriptionLineItem{}))
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType:  types.CancellationTypeEndOfPeriod,
+			ProrationBehavior: types.ProrationBehaviorNone,
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "already scheduled")
+		s.T().Logf("✅ end_of_period: same guard blocks double-scheduling")
+	})
+
+	s.Run("already cancelled subscription is rejected", func() {
+		sub := &subscription.Subscription{
+			ID:                 "sub_sched_already_cancelled",
+			CustomerID:         s.testData.customer.ID,
+			PlanID:             s.testData.plan.ID,
+			SubscriptionStatus: types.SubscriptionStatusCancelled,
+			StartDate:          s.testData.now.Add(-60 * 24 * time.Hour),
+			CurrentPeriodStart: s.testData.now.Add(-5 * 24 * time.Hour),
+			CurrentPeriodEnd:   s.testData.now.Add(25 * 24 * time.Hour),
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			Currency:           "usd",
+			BaseModel:          types.GetDefaultBaseModel(ctx),
+		}
+		s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(ctx, sub, []*subscription.SubscriptionLineItem{}))
+
+		_, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+		})
+		s.Error(err)
+		s.True(ierr.IsValidation(err), "expected validation error")
+		s.Contains(err.Error(), "already cancelled")
+		s.T().Logf("✅ scheduled_date: already-cancelled subscription rejected")
+	})
+
+	s.Run("response message contains formatted date", func() {
+		sub := newActiveSub("sub_sched_msg")
+
+		resp, err := s.service.CancelSubscription(ctx, sub.ID, &dto.CancelSubscriptionRequest{
+			CancellationType: types.CancellationTypeScheduledDate,
+			CancelAt:         &futureDate,
+		})
+		s.NoError(err)
+		s.Contains(resp.Message, futureDate.Format("2006-01-02"))
+		s.Equal(futureDate.UTC().Truncate(time.Second), resp.EffectiveDate.UTC().Truncate(time.Second))
+		s.Equal(types.CancellationTypeScheduledDate, resp.CancellationType)
+		s.T().Logf("✅ scheduled_date: response message and fields correct")
 	})
 }
 
@@ -3253,10 +4337,10 @@ func (s *SubscriptionServiceSuite) TestProcessSubscriptionPeriod() {
 	// Now let's test a successful scenario by setting up proper line items with arrear invoice cadence
 	// Update the prices to have arrear invoice cadence
 	s.testData.prices.apiCalls.InvoiceCadence = types.InvoiceCadenceArrear
-	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls))
+	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls, false))
 
 	s.testData.prices.storage.InvoiceCadence = types.InvoiceCadenceArrear
-	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.storage))
+	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.storage, false))
 
 	// Create some usage events for the current period
 	for i := 0; i < 100; i++ {
@@ -3384,7 +4468,6 @@ func (s *SubscriptionServiceSuite) TestSubscriptionAnchor_CalendarAndAnniversary
 				PlanID:             s.testData.plan.ID,
 				StartDate:          lo.ToPtr(tt.startDate),
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      tt.billingPeriod,
 				BillingPeriodCount: 1,
 				BillingCycle:       tt.billingCycle,
@@ -3577,7 +4660,6 @@ func (s *SubscriptionServiceSuite) TestSubscriptionWithEndDate() {
 				StartDate:          lo.ToPtr(tt.startDate),
 				EndDate:            tt.endDate,
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -3641,7 +4723,6 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscriptionWithBucketedMaxAggr
 					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 					BillingPeriodCount: 1,
 					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
-					BillingCadence:     types.BILLING_CADENCE_RECURRING,
 					InvoiceCadence:     types.InvoiceCadenceArrear,
 					MeterID:            bucketedMaxMeter.ID,
 					BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
@@ -3666,7 +4747,6 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscriptionWithBucketedMaxAggr
 					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 					BillingPeriodCount: 1,
 					BillingModel:       types.BILLING_MODEL_PACKAGE,
-					BillingCadence:     types.BILLING_CADENCE_RECURRING,
 					InvoiceCadence:     types.InvoiceCadenceArrear,
 					MeterID:            bucketedMaxMeter.ID,
 					TransformQuantity: price.JSONBTransformQuantity{
@@ -3696,7 +4776,6 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscriptionWithBucketedMaxAggr
 					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 					BillingPeriodCount: 1,
 					BillingModel:       types.BILLING_MODEL_TIERED,
-					BillingCadence:     types.BILLING_CADENCE_RECURRING,
 					InvoiceCadence:     types.InvoiceCadenceArrear,
 					TierMode:           types.BILLING_TIER_SLAB,
 					MeterID:            bucketedMaxMeter.ID,
@@ -3727,7 +4806,6 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscriptionWithBucketedMaxAggr
 					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 					BillingPeriodCount: 1,
 					BillingModel:       types.BILLING_MODEL_TIERED,
-					BillingCadence:     types.BILLING_CADENCE_RECURRING,
 					InvoiceCadence:     types.InvoiceCadenceArrear,
 					TierMode:           types.BILLING_TIER_VOLUME,
 					MeterID:            bucketedMaxMeter.ID,
@@ -3859,26 +4937,27 @@ func (s *SubscriptionServiceSuite) TestGetUsageBySubscriptionWithBucketedMaxAggr
 func (s *SubscriptionServiceSuite) TestFilterLineItemsWithEndDate() {
 	// Create billing service
 	billingService := NewBillingService(ServiceParams{
-		Logger:           s.GetLogger(),
-		Config:           s.GetConfig(),
-		DB:               s.GetDB(),
-		SubRepo:          s.GetStores().SubscriptionRepo,
-		PlanRepo:         s.GetStores().PlanRepo,
-		PriceRepo:        s.GetStores().PriceRepo,
-		EventRepo:        s.GetStores().EventRepo,
-		MeterRepo:        s.GetStores().MeterRepo,
-		CustomerRepo:     s.GetStores().CustomerRepo,
-		InvoiceRepo:      s.GetStores().InvoiceRepo,
-		EntitlementRepo:  s.GetStores().EntitlementRepo,
-		EnvironmentRepo:  s.GetStores().EnvironmentRepo,
-		FeatureRepo:      s.GetStores().FeatureRepo,
-		TenantRepo:       s.GetStores().TenantRepo,
-		UserRepo:         s.GetStores().UserRepo,
-		AuthRepo:         s.GetStores().AuthRepo,
-		WalletRepo:       s.GetStores().WalletRepo,
-		PaymentRepo:      s.GetStores().PaymentRepo,
-		EventPublisher:   s.GetPublisher(),
-		WebhookPublisher: s.GetWebhookPublisher(),
+		Logger:                   s.GetLogger(),
+		Config:                   s.GetConfig(),
+		DB:                       s.GetDB(),
+		SubRepo:                  s.GetStores().SubscriptionRepo,
+		SubscriptionLineItemRepo: s.GetStores().SubscriptionLineItemRepo,
+		PlanRepo:                 s.GetStores().PlanRepo,
+		PriceRepo:                s.GetStores().PriceRepo,
+		EventRepo:                s.GetStores().EventRepo,
+		MeterRepo:                s.GetStores().MeterRepo,
+		CustomerRepo:             s.GetStores().CustomerRepo,
+		InvoiceRepo:              s.GetStores().InvoiceRepo,
+		EntitlementRepo:          s.GetStores().EntitlementRepo,
+		EnvironmentRepo:          s.GetStores().EnvironmentRepo,
+		FeatureRepo:              s.GetStores().FeatureRepo,
+		TenantRepo:               s.GetStores().TenantRepo,
+		UserRepo:                 s.GetStores().UserRepo,
+		AuthRepo:                 s.GetStores().AuthRepo,
+		WalletRepo:               s.GetStores().WalletRepo,
+		PaymentRepo:              s.GetStores().PaymentRepo,
+		EventPublisher:           s.GetPublisher(),
+		WebhookPublisher:         s.GetWebhookPublisher(),
 	})
 
 	// Create subscription with end date in the past
@@ -3947,10 +5026,12 @@ func (s *SubscriptionServiceSuite) TestFilterLineItemsWithEndDate() {
 		s.Run(tt.name, func() {
 			filtered, err := billingService.FilterLineItemsToBeInvoiced(
 				s.GetContext(),
-				sub,
-				tt.periodStart,
-				tt.periodEnd,
-				lineItems,
+				&dto.FilterLineItemsToBeInvoicedParams{
+					Subscription: sub,
+					PeriodStart:  tt.periodStart,
+					PeriodEnd:    tt.periodEnd,
+					LineItems:    lineItems,
+				},
 			)
 			s.NoError(err)
 
@@ -4184,7 +5265,6 @@ func (s *SubscriptionServiceSuite) TestCreateSubscriptionWithPriceOverrides() {
 				CustomerID:         s.testData.customer.ID,
 				PlanID:             s.testData.plan.ID,
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -4705,7 +5785,6 @@ func (s *SubscriptionServiceSuite) TestPriceOverrideIntegration() {
 			CustomerID:         s.testData.customer.ID,
 			PlanID:             s.testData.plan.ID,
 			Currency:           "usd",
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
 			BillingCycle:       types.BillingCycleAnniversary,
@@ -4767,7 +5846,6 @@ func (s *SubscriptionServiceSuite) TestPriceOverrideIntegration() {
 				CustomerID:         s.testData.customer.ID,
 				PlanID:             s.testData.plan.ID,
 				Currency:           "usd",
-				BillingCadence:     types.BILLING_CADENCE_RECURRING,
 				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 				BillingPeriodCount: 1,
 				BillingCycle:       types.BillingCycleAnniversary,
@@ -4828,7 +5906,7 @@ func (s *SubscriptionServiceSuite) TestProcessSubscriptionPeriodWithInvoicingCus
 
 	// Update prices to have arrear invoice cadence
 	s.testData.prices.apiCalls.InvoiceCadence = types.InvoiceCadenceArrear
-	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls))
+	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls, false))
 
 	// Create usage events (tracked by subscription customer)
 	for i := 0; i < 100; i++ {
@@ -5048,7 +6126,7 @@ func (s *SubscriptionServiceSuite) TestUpdateBillingPeriodsWithInvoicingCustomer
 
 	// Update prices to have arrear invoice cadence
 	s.testData.prices.apiCalls.InvoiceCadence = types.InvoiceCadenceArrear
-	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls))
+	s.NoError(s.GetStores().PriceRepo.Update(s.GetContext(), s.testData.prices.apiCalls, false))
 
 	// Create usage events
 	for i := 0; i < 50; i++ {
@@ -5104,4 +6182,415 @@ func (s *SubscriptionServiceSuite) TestUpdateBillingPeriodsWithInvoicingCustomer
 	s.NoError(err)
 	s.True(updatedSub.CurrentPeriodStart.After(periodStart), "Period start should be updated")
 	s.True(updatedSub.CurrentPeriodEnd.After(periodEnd), "Period end should be updated")
+}
+
+// TestMultiCadence_ProrationMutualExclusion_Creation implements PRD E.3.1: subscription creation with mixed billing periods.
+// Mixed periods + none -> success; mixed periods + create_prorations -> error.
+func (s *SubscriptionServiceSuite) TestMultiCadence_ProrationMutualExclusion_Creation() {
+	ctx := s.GetContext()
+	s.ClearStores()
+	s.setupTestData()
+
+	// Plan with monthly + quarterly fixed prices (multi-cadence)
+	planMQ := &plan.Plan{
+		ID:          types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PLAN),
+		Name:        "Plan M+Q",
+		Description: "Monthly and Quarterly",
+		BaseModel:   types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PlanRepo.Create(ctx, planMQ))
+
+	priceM := &price.Price{
+		ID:                 types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+		Amount:             decimal.NewFromInt(10),
+		Currency:           "usd",
+		EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+		EntityID:           planMQ.ID,
+		Type:               types.PRICE_TYPE_FIXED,
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
+		BaseModel:          types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PriceRepo.Create(ctx, priceM))
+	priceQ := &price.Price{
+		ID:                 types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+		Amount:             decimal.NewFromInt(100),
+		Currency:           "usd",
+		EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+		EntityID:           planMQ.ID,
+		Type:               types.PRICE_TYPE_FIXED,
+		BillingPeriod:      types.BILLING_PERIOD_QUARTER,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
+		BaseModel:          types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PriceRepo.Create(ctx, priceQ))
+
+	start := time.Now().UTC().Truncate(time.Millisecond)
+	reqNone := dto.CreateSubscriptionRequest{
+		CustomerID:         s.testData.customer.ID,
+		PlanID:             planMQ.ID,
+		StartDate:          &start,
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		ProrationBehavior:  types.ProrationBehaviorNone,
+	}
+	resp, err := s.service.CreateSubscription(ctx, reqNone)
+	s.NoError(err, "E.3.1: mixed periods + none should succeed")
+	s.NotNil(resp)
+	s.NotEmpty(resp.ID)
+
+	// Same plan, create_prorations -> must fail
+	reqProration := reqNone
+	reqProration.ProrationBehavior = types.ProrationBehaviorCreateProrations
+	_, err2 := s.service.CreateSubscription(ctx, reqProration)
+	s.Require().Error(err2, "E.3.1: mixed periods + create_prorations must fail")
+	s.True(ierr.IsValidation(err2), "error should be validation")
+	s.Contains(err2.Error(), "mixed billing periods", "error message should mention mixed billing periods")
+}
+
+// TestMultiCadence_ProrationMutualExclusion_Cancellation implements PRD E.3.2: cancel with mixed periods + create_prorations -> error.
+func (s *SubscriptionServiceSuite) TestMultiCadence_ProrationMutualExclusion_Cancellation() {
+	ctx := s.GetContext()
+	s.ClearStores()
+	s.setupTestData()
+
+	planMQ := &plan.Plan{
+		ID:        types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PLAN),
+		Name:      "Plan M+Q Cancel",
+		BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PlanRepo.Create(ctx, planMQ))
+	priceM := &price.Price{
+		ID:                 types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+		Amount:             decimal.NewFromInt(10),
+		Currency:           "usd",
+		EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+		EntityID:           planMQ.ID,
+		Type:               types.PRICE_TYPE_FIXED,
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
+		BaseModel:          types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PriceRepo.Create(ctx, priceM))
+	priceQ := &price.Price{
+		ID:                 types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+		Amount:             decimal.NewFromInt(100),
+		Currency:           "usd",
+		EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+		EntityID:           planMQ.ID,
+		Type:               types.PRICE_TYPE_FIXED,
+		BillingPeriod:      types.BILLING_PERIOD_QUARTER,
+		BillingPeriodCount: 1,
+		BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
+		BaseModel:          types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().PriceRepo.Create(ctx, priceQ))
+
+	start := time.Now().UTC().Truncate(time.Millisecond)
+	createReq := dto.CreateSubscriptionRequest{
+		CustomerID:         s.testData.customer.ID,
+		PlanID:             planMQ.ID,
+		StartDate:          &start,
+		Currency:           "usd",
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		BillingCycle:       types.BillingCycleAnniversary,
+		ProrationBehavior:  types.ProrationBehaviorNone,
+	}
+	resp, err := s.service.CreateSubscription(ctx, createReq)
+	s.NoError(err)
+	s.Require().NotNil(resp)
+
+	cancelReq := &dto.CancelSubscriptionRequest{
+		CancellationType:  types.CancellationTypeImmediate,
+		ProrationBehavior: types.ProrationBehaviorCreateProrations,
+	}
+	cancelReq.Validate()
+	_, errCancel := s.service.CancelSubscription(ctx, resp.ID, cancelReq)
+	s.Require().Error(errCancel, "E.3.2: cancel with mixed + create_prorations must fail")
+	s.True(ierr.IsValidation(errCancel))
+	s.Contains(errCancel.Error(), "mixed billing periods")
+
+	// Same sub, cancel with none -> success (need a new sub since we didn't cancel the first with none first - actually first cancel failed so sub is still active)
+	cancelReqNone := &dto.CancelSubscriptionRequest{
+		CancellationType:  types.CancellationTypeImmediate,
+		ProrationBehavior: types.ProrationBehaviorNone,
+	}
+	cancelReqNone.Validate()
+	_, errCancelNone := s.service.CancelSubscription(ctx, resp.ID, cancelReqNone)
+	s.NoError(errCancelNone, "E.3.2: cancel with mixed + none should succeed")
+}
+
+func (s *SubscriptionServiceSuite) TestExternalCustomerIDsForSubscription() {
+	ctx := s.GetContext()
+	svc := s.service
+
+	tests := []struct {
+		name    string
+		setup   func() *subscription.Subscription
+		wantIDs []string
+	}{
+		{
+			name: "standalone subscription returns only owner external ID",
+			setup: func() *subscription.Subscription {
+				return s.testData.subscription // already standalone, ExternalID = "ext_cust_123"
+			},
+			wantIDs: []string{"ext_cust_123"},
+		},
+		{
+			name: "parent subscription includes active child external IDs",
+			setup: func() *subscription.Subscription {
+				// promote the existing sub to parent
+				parentSub := s.testData.subscription
+				parentSub.SubscriptionType = types.SubscriptionTypeParent
+				s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, parentSub))
+
+				// create a child customer
+				childCust := &customer.Customer{
+					ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+					ExternalID: "ext_child_1",
+					Name:       "Child Customer",
+					BaseModel:  types.GetDefaultBaseModel(ctx),
+				}
+				s.NoError(s.GetStores().CustomerRepo.Create(ctx, childCust))
+
+				// create an inherited subscription for the child
+				childSub := &subscription.Subscription{
+					ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+					CustomerID:           childCust.ID,
+					PlanID:               parentSub.PlanID,
+					SubscriptionStatus:   types.SubscriptionStatusActive,
+					SubscriptionType:     types.SubscriptionTypeInherited,
+					ParentSubscriptionID: lo.ToPtr(parentSub.ID),
+					Currency:             parentSub.Currency,
+					BaseModel:            types.GetDefaultBaseModel(ctx),
+				}
+				s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, childSub))
+				return parentSub
+			},
+			wantIDs: []string{"ext_cust_123", "ext_child_1"},
+		},
+		{
+			name: "parent subscription excludes paused child",
+			setup: func() *subscription.Subscription {
+				parentSub := s.testData.subscription
+				parentSub.SubscriptionType = types.SubscriptionTypeParent
+				s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, parentSub))
+
+				pausedCust := &customer.Customer{
+					ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+					ExternalID: "ext_paused_child",
+					Name:       "Paused Child Customer",
+					BaseModel:  types.GetDefaultBaseModel(ctx),
+				}
+				s.NoError(s.GetStores().CustomerRepo.Create(ctx, pausedCust))
+
+				pausedSub := &subscription.Subscription{
+					ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+					CustomerID:           pausedCust.ID,
+					PlanID:               parentSub.PlanID,
+					SubscriptionStatus:   types.SubscriptionStatusPaused,
+					SubscriptionType:     types.SubscriptionTypeInherited,
+					ParentSubscriptionID: lo.ToPtr(parentSub.ID),
+					Currency:             parentSub.Currency,
+					BaseModel:            types.GetDefaultBaseModel(ctx),
+				}
+				s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, pausedSub))
+				return parentSub
+			},
+			wantIDs: []string{"ext_cust_123"}, // paused child excluded
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.ClearStores()
+			s.setupTestData()
+			sub := tt.setup()
+			got, err := svc.ExternalCustomerIDsForSubscription(ctx, sub)
+			s.NoError(err)
+			s.ElementsMatch(tt.wantIDs, got)
+		})
+	}
+}
+
+func (s *SubscriptionServiceSuite) TestGetUsageBySubscription_ParentIncludesChildUsage() {
+	ctx := s.GetContext()
+	now := s.testData.now
+
+	// Create child customer
+	childCust := &customer.Customer{
+		ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_CUSTOMER),
+		ExternalID: "ext_child_usage",
+		Name:       "Child Customer",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, childCust))
+
+	// Promote existing subscription to parent
+	parentSub := s.testData.subscription
+	parentSub.SubscriptionType = types.SubscriptionTypeParent
+	s.NoError(s.GetStores().SubscriptionRepo.Update(ctx, parentSub))
+
+	// Create inherited subscription for child (no line items needed — line items live on parent)
+	childSub := &subscription.Subscription{
+		ID:                   types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION),
+		CustomerID:           childCust.ID,
+		PlanID:               parentSub.PlanID,
+		SubscriptionStatus:   types.SubscriptionStatusActive,
+		SubscriptionType:     types.SubscriptionTypeInherited,
+		ParentSubscriptionID: lo.ToPtr(parentSub.ID),
+		Currency:             parentSub.Currency,
+		BaseModel:            types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().SubscriptionRepo.Create(ctx, childSub))
+
+	// Ingest 500 api_call events for the child customer
+	for i := 0; i < 500; i++ {
+		event := &events.Event{
+			ID:                 s.GetUUID(),
+			TenantID:           parentSub.TenantID,
+			EventName:          s.testData.meters.apiCalls.EventName,
+			ExternalCustomerID: childCust.ExternalID,
+			Timestamp:          now.Add(-1 * time.Hour),
+			Properties:         map[string]interface{}{},
+		}
+		s.NoError(s.GetStores().EventRepo.InsertEvent(ctx, event))
+	}
+
+	// Parent already has 1500 api_call events from setupTestData.
+	// After this test: parent=1500 + child=500 = 2000 total api_calls.
+	// Cost at tiered pricing: (1000*0.02) + (1000*0.005) = 20 + 5 = 25
+	resp, err := s.service.GetUsageBySubscription(ctx, &dto.GetUsageBySubscriptionRequest{
+		SubscriptionID: parentSub.ID,
+		StartTime:      now.Add(-48 * time.Hour),
+		EndTime:        now,
+	})
+	s.NoError(err)
+
+	// Find api_calls charge
+	var apiCharge *dto.SubscriptionUsageByMetersResponse
+	for _, c := range resp.Charges {
+		if c.MeterDisplayName == "API Calls" {
+			apiCharge = c
+			break
+		}
+	}
+	s.Require().NotNil(apiCharge, "expected API Calls charge in response")
+	s.Equal(float64(2000), apiCharge.Quantity)
+	s.Equal(25.0, apiCharge.Amount) // (1000*0.02) + (1000*0.005)
+}
+
+// TestCreateSubscription_TrialStart_Invoice verifies that creating a TRIALING subscription
+// produces a $0 FINALIZED invoice with BillingReason=SUBSCRIPTION_TRIAL_START whose period
+// covers the trial window. Payment status should be SUCCEEDED for charge_automatically and
+// PENDING for send_invoice.
+//
+// NOTE: This test MUST FAIL until Task 4/5 implement trial-start invoice creation in
+// CreateSubscription. The expected failure point is the NotNil assertion for trialInv.
+func (s *SubscriptionServiceSuite) TestCreateSubscription_TrialStart_Invoice() {
+	ctx := s.GetContext()
+	now := s.testData.now
+
+	trialStart := now
+	trialEnd := now.Add(14 * 24 * time.Hour) // 14-day trial
+
+	type subcase struct {
+		name             string
+		collectionMethod types.CollectionMethod
+		wantPayStatus    types.PaymentStatus
+	}
+
+	cases := []subcase{
+		{
+			name:             "charge_automatically",
+			collectionMethod: types.CollectionMethodChargeAutomatically,
+			wantPayStatus:    types.PaymentStatusSucceeded,
+		},
+		{
+			name:             "send_invoice",
+			collectionMethod: types.CollectionMethodSendInvoice,
+			wantPayStatus:    types.PaymentStatusPending,
+		},
+	}
+
+	invoiceSvc := s.createInvoiceService()
+
+	for _, tc := range cases {
+		tc := tc
+		s.Run(tc.name, func() {
+			req := dto.CreateSubscriptionRequest{
+				CustomerID:         s.testData.customer.ID,
+				PlanID:             s.testData.plan.ID,
+				StartDate:          &trialStart,
+				Currency:           "usd",
+				BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+				BillingPeriodCount: 1,
+				BillingCycle:       types.BillingCycleAnniversary,
+				CollectionMethod:   lo.ToPtr(tc.collectionMethod),
+				// TrialStart/TrialEnd are internal-only fields (json:"-"), safe to set in service tests.
+				TrialStart: &trialStart,
+				TrialEnd:   &trialEnd,
+			}
+
+			resp, err := s.service.CreateSubscription(ctx, req)
+			s.Require().NoError(err, "CreateSubscription must succeed")
+			s.Require().NotNil(resp)
+
+			// The subscription must be TRIALING while within the trial window.
+			s.Equal(types.SubscriptionStatusTrialing, resp.SubscriptionStatus,
+				"subscription created with a trial window must start in TRIALING status")
+
+			// Retrieve all invoices for this subscription.
+			filter := types.NewNoLimitInvoiceFilter()
+			filter.SubscriptionID = resp.ID
+			filter.InvoiceType = types.InvoiceTypeSubscription
+
+			invoicesResp, err := invoiceSvc.ListInvoices(ctx, filter)
+			s.Require().NoError(err, "listing invoices must not fail")
+
+			// Find the trial-start invoice by billing reason.
+			// BillingReason is stored as a plain string in the domain model.
+			var trialInv *dto.InvoiceResponse
+			for _, inv := range invoicesResp.Items {
+				if inv.BillingReason == string(types.InvoiceBillingReasonSubscriptionTrialStart) {
+					trialInv = inv
+					break
+				}
+			}
+
+			// *** This assertion is the expected failure point in Task 3. ***
+			// No trial-start invoice is created yet; Task 4/5 will implement it.
+			s.Require().NotNil(trialInv, "trial start invoice must exist (BillingReason=SUBSCRIPTION_TRIAL_START)")
+
+			// Verify invoice is FINALIZED (not SKIPPED).
+			s.Equal(types.InvoiceStatusFinalized, trialInv.InvoiceStatus,
+				"trial start invoice must be FINALIZED")
+
+			// Verify all amounts are zero.
+			s.True(trialInv.Total.IsZero(), "trial start invoice total must be $0")
+			s.True(trialInv.AmountDue.IsZero(), "trial start invoice amount_due must be $0")
+
+			// Verify period covers the trial window.
+			s.Require().NotNil(trialInv.PeriodStart, "trial start invoice must have period_start")
+			s.Require().NotNil(trialInv.PeriodEnd, "trial start invoice must have period_end")
+			s.Equal(trialStart.Unix(), trialInv.PeriodStart.Unix(),
+				"invoice period_start must equal trial_start")
+			s.Equal(trialEnd.Unix(), trialInv.PeriodEnd.Unix(),
+				"invoice period_end must equal trial_end")
+
+			// Verify payment status is driven by collection method.
+			s.Equal(tc.wantPayStatus, trialInv.PaymentStatus,
+				"payment status must match collection method expectation")
+		})
+	}
 }

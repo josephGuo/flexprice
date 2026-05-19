@@ -2,23 +2,30 @@ package v1
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/api/dto"
 	"github.com/flexprice/flexprice/internal/config"
+	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/integration"
 	chargebeewebhook "github.com/flexprice/flexprice/internal/integration/chargebee/webhook"
+	moyasarwebhook "github.com/flexprice/flexprice/internal/integration/moyasar/webhook"
 	nomodwebhook "github.com/flexprice/flexprice/internal/integration/nomod/webhook"
+	paddlewebhook "github.com/flexprice/flexprice/internal/integration/paddle/webhook"
 	quickbookswebhook "github.com/flexprice/flexprice/internal/integration/quickbooks/webhook"
 	razorpaywebhook "github.com/flexprice/flexprice/internal/integration/razorpay/webhook"
 	"github.com/flexprice/flexprice/internal/integration/stripe/webhook"
+	zohowebhook "github.com/flexprice/flexprice/internal/integration/zoho/webhook"
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/postgres"
 	"github.com/flexprice/flexprice/internal/svix"
 	"github.com/flexprice/flexprice/internal/types"
+	flexwebhook "github.com/flexprice/flexprice/internal/webhook"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +42,7 @@ type WebhookHandler struct {
 	subscriptionService             interfaces.SubscriptionService
 	entityIntegrationMappingService interfaces.EntityIntegrationMappingService
 	db                              postgres.IClient
+	webhookService                  *flexwebhook.WebhookService
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -50,6 +58,7 @@ func NewWebhookHandler(
 	subscriptionService interfaces.SubscriptionService,
 	entityIntegrationMappingService interfaces.EntityIntegrationMappingService,
 	db postgres.IClient,
+	webhookService *flexwebhook.WebhookService,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		config:                          cfg,
@@ -63,6 +72,7 @@ func NewWebhookHandler(
 		subscriptionService:             subscriptionService,
 		entityIntegrationMappingService: entityIntegrationMappingService,
 		db:                              db,
+		webhookService:                  webhookService,
 	}
 }
 
@@ -110,18 +120,29 @@ func (h *WebhookHandler) GetDashboardURL(c *gin.Context) {
 	})
 }
 
-// @Summary Handle Stripe webhook events
-// @Description Process incoming Stripe webhook events for payment status updates and customer creation
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param Stripe-Signature header string true "Stripe webhook signature"
-// @Success 200 {object} map[string]interface{} "Webhook processed successfully"
-// @Failure 400 {object} map[string]interface{} "Bad request - missing parameters or invalid signature"
-// @Failure 500 {object} map[string]interface{} "Internal server error"
-// @Router /webhooks/stripe/{tenant_id}/{environment_id} [post]
+func (h *WebhookHandler) RetryOutboundWebhook(c *gin.Context) {
+	ctx := c.Request.Context()
+	var req dto.RetryOutboundWebhookRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Error(ierr.WithError(err).
+			WithHint("Provide a JSON body with system_event_id (system_events.id).").
+			Mark(ierr.ErrValidation))
+		return
+	}
+
+	err := h.webhookService.RetriggerSystemEvent(ctx, types.GetTenantID(ctx), types.GetEnvironmentID(ctx), req.SystemEventID)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusAccepted, dto.RetryOutboundWebhookResponse{
+		Success:       true,
+		Message:       "Webhook delivery completed for the system event",
+		SystemEventID: req.SystemEventID,
+	})
+}
+
 func (h *WebhookHandler) HandleStripeWebhook(c *gin.Context) {
 	tenantID := c.Param("tenant_id")
 	environmentID := c.Param("environment_id")
@@ -236,16 +257,6 @@ func (h *WebhookHandler) HandleStripeWebhook(c *gin.Context) {
 	})
 }
 
-// @Summary Handle HubSpot webhook events
-// @Description Process incoming HubSpot webhook events for deal closed won and customer creation
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param X-HubSpot-Signature-v3 header string true "HubSpot webhook signature"
-// @Success 200 {object} map[string]interface{} "Webhook received (always returns 200)"
-// @Router /webhooks/hubspot/{tenant_id}/{environment_id} [post]
 func (h *WebhookHandler) HandleHubSpotWebhook(c *gin.Context) {
 	// Always return 200 OK to HubSpot to prevent retries
 	// We log errors internally but don't expose them to HubSpot
@@ -405,16 +416,6 @@ func (h *WebhookHandler) HandleHubSpotWebhook(c *gin.Context) {
 		"event_count", len(events))
 }
 
-// @Summary Handle Razorpay webhook events
-// @Description Process incoming Razorpay webhook events for payment capture and failure
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param X-Razorpay-Signature header string true "Razorpay webhook signature"
-// @Success 200 {object} map[string]interface{} "Webhook received (always returns 200)"
-// @Router /webhooks/razorpay/{tenant_id}/{environment_id} [post]
 func (h *WebhookHandler) HandleRazorpayWebhook(c *gin.Context) {
 	// Always return 200 OK to Razorpay to prevent retries
 	// We log errors internally but don't expose them to Razorpay
@@ -516,19 +517,6 @@ func (h *WebhookHandler) HandleRazorpayWebhook(c *gin.Context) {
 		"event_type", event.Event)
 }
 
-// @Summary Handle Chargebee webhook events
-// @Description Process incoming Chargebee webhook events for payment status updates
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param Authorization header string false "Basic Auth credentials"
-// @Success 200 {object} map[string]interface{} "Webhook processed successfully"
-// @Failure 401 {object} map[string]interface{} "Unauthorized"
-// @Failure 400 {object} map[string]interface{} "Bad request"
-// @Failure 500 {object} map[string]interface{} "Internal server error"
-// @Router /webhooks/chargebee/{tenant_id}/{environment_id} [post]
 func (h *WebhookHandler) HandleChargebeeWebhook(c *gin.Context) {
 	// Always return 200 OK to Chargebee to prevent retries
 	// We log errors internally but don't expose them to Chargebee
@@ -655,19 +643,6 @@ func (h *WebhookHandler) HandleChargebeeWebhook(c *gin.Context) {
 		"event_type", event.EventType)
 }
 
-// @Summary Handle QuickBooks webhook events
-// @Description Process incoming QuickBooks webhook events for payment sync
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param intuit-signature header string false "QuickBooks webhook signature"
-// @Success 200 {object} map[string]interface{} "Webhook processed successfully"
-// @Failure 401 {object} map[string]interface{} "Unauthorized - invalid signature"
-// @Failure 400 {object} map[string]interface{} "Bad request"
-// @Failure 500 {object} map[string]interface{} "Internal server error"
-// @Router /webhooks/quickbooks/{tenant_id}/{environment_id} [post]
 func (h *WebhookHandler) HandleQuickBooksWebhook(c *gin.Context) {
 	// Always return 200 OK to QuickBooks to prevent retries
 	// We log errors internally but don't expose them to QuickBooks
@@ -758,17 +733,6 @@ func (h *WebhookHandler) HandleQuickBooksWebhook(c *gin.Context) {
 		"environment_id", environmentID)
 }
 
-// @Summary Handle Nomod webhook events
-// @Description Process incoming Nomod webhook events for payment and invoice payments
-// @Tags Webhooks
-// @Accept json
-// @Produce json
-// @Param tenant_id path string true "Tenant ID"
-// @Param environment_id path string true "Environment ID"
-// @Param X-API-KEY header string false "Nomod webhook secret (if configured)"
-// @Success 200 {object} map[string]interface{} "Webhook processed successfully"
-// @Failure 401 {object} map[string]interface{} "Unauthorized - invalid or missing X-API-KEY"
-// @Router /webhooks/nomod/{tenant_id}/{environment_id} [post]
 func (h *WebhookHandler) HandleNomodWebhook(c *gin.Context) {
 	tenantID := c.Param("tenant_id")
 	environmentID := c.Param("environment_id")
@@ -904,4 +868,327 @@ func (h *WebhookHandler) HandleNomodWebhook(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Webhook processed successfully",
 	})
+}
+
+func (h *WebhookHandler) HandleMoyasarWebhook(c *gin.Context) {
+	// Always return 200 OK to Moyasar to prevent retries
+	// We log errors internally but don't expose them to Moyasar
+	defer func() {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Webhook received",
+		})
+	}()
+
+	tenantID := c.Param("tenant_id")
+	environmentID := c.Param("environment_id")
+
+	if tenantID == "" || environmentID == "" {
+		h.logger.Errorw("missing tenant_id or environment_id in webhook URL",
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		return
+	}
+
+	// Read the raw request body
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		h.logger.Errorw("failed to read request body", "error", err)
+		return
+	}
+
+	// Set context with tenant and environment IDs
+	ctx := types.SetTenantID(c.Request.Context(), tenantID)
+	ctx = types.SetEnvironmentID(ctx, environmentID)
+	c.Request = c.Request.WithContext(ctx)
+
+	// Parse webhook payload first to get the secret_token
+	var event moyasarwebhook.MoyasarWebhookEvent
+	err = json.Unmarshal(body, &event)
+	if err != nil {
+		h.logger.Errorw("failed to parse Moyasar webhook payload", "error", err)
+		return
+	}
+
+	// Get Moyasar integration
+	moyasarIntegration, err := h.integrationFactory.GetMoyasarIntegration(ctx)
+	if err != nil {
+		h.logger.Errorw("failed to get Moyasar integration", "error", err)
+		return
+	}
+
+	// Get connection to check if webhook secret is configured
+	conn, err := moyasarIntegration.Client.GetConnection(ctx)
+	if err != nil {
+		h.logger.Errorw("failed to get Moyasar connection", "error", err)
+		return
+	}
+
+	// Check if webhook secret is configured in FlexPrice
+	hasWebhookSecretConfigured := conn.EncryptedSecretData.Moyasar != nil &&
+		conn.EncryptedSecretData.Moyasar.WebhookSecret != ""
+
+	// Verify webhook secret_token from payload if configured
+	// According to Moyasar docs, the secret is sent in the payload as "secret_token", not as HTTP header
+	if hasWebhookSecretConfigured {
+		// Webhook secret is configured - verification is REQUIRED
+		if event.SecretToken == "" {
+			h.logger.Errorw("Moyasar webhook secret configured but secret_token missing in payload - rejecting request",
+				"tenant_id", tenantID,
+				"environment_id", environmentID,
+				"event_id", event.ID,
+				"note", "Moyasar must send shared_secret as secret_token in webhook payload when configured")
+			return
+		}
+
+		// Get the decrypted Moyasar config to access the webhook secret
+		moyasarConfig, err := moyasarIntegration.Client.GetDecryptedMoyasarConfig(conn)
+		if err != nil {
+			h.logger.Errorw("failed to get decrypted Moyasar config",
+				"error", err,
+				"tenant_id", tenantID,
+				"environment_id", environmentID)
+			return
+		}
+
+		// Verify the secret_token matches our configured (decrypted) webhook_secret
+		if event.SecretToken != moyasarConfig.WebhookSecret {
+			h.logger.Errorw("Moyasar webhook secret_token verification failed - rejecting request",
+				"tenant_id", tenantID,
+				"environment_id", environmentID,
+				"event_id", event.ID,
+				"note", "secret_token in payload does not match configured webhook_secret")
+			return
+		}
+
+		h.logger.Infow("Moyasar webhook secret_token verified successfully",
+			"tenant_id", tenantID,
+			"environment_id", environmentID,
+			"event_id", event.ID)
+	} else {
+		// No webhook secret configured - allow with warning
+		h.logger.Warnw("Moyasar webhook received without secret verification",
+			"tenant_id", tenantID,
+			"environment_id", environmentID,
+			"event_id", event.ID,
+			"note", "Configure webhook_secret in Moyasar connection for enhanced security")
+	}
+
+	// Log webhook processing (without sensitive data)
+	h.logger.Infow("processing Moyasar webhook",
+		"environment_id", environmentID,
+		"tenant_id", tenantID,
+		"event_type", event.Type,
+		"event_id", event.ID,
+		"payload_length", len(body))
+
+	// Create service dependencies for webhook handler
+	serviceDeps := &moyasarwebhook.ServiceDependencies{
+		CustomerService:                 h.customerService,
+		PaymentService:                  h.paymentService,
+		InvoiceService:                  h.invoiceService,
+		PlanService:                     h.planService,
+		SubscriptionService:             h.subscriptionService,
+		EntityIntegrationMappingService: h.entityIntegrationMappingService,
+		DB:                              h.db,
+	}
+
+	// Handle the webhook event
+	err = moyasarIntegration.WebhookHandler.HandleWebhookEvent(ctx, &event, environmentID, serviceDeps)
+	if err != nil {
+		h.logger.Errorw("failed to handle Moyasar webhook event",
+			"error", err,
+			"event_type", event.Type,
+			"environment_id", environmentID)
+		return
+	}
+
+	h.logger.Infow("successfully processed Moyasar webhook",
+		"environment_id", environmentID,
+		"event_type", event.Type)
+}
+
+// HandleZohoBooksWebhook handles POST /v1/webhooks/zoho_books/:tenant_id/:environment_id
+func (h *WebhookHandler) HandleZohoBooksWebhook(c *gin.Context) {
+	tenantID := c.Param("tenant_id")
+	environmentID := c.Param("environment_id")
+	if tenantID == "" || environmentID == "" {
+		h.logger.Errorw("missing tenant_id or environment_id in Zoho webhook URL",
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "tenant_id and environment_id are required",
+		})
+		return
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		h.logger.Errorw("failed to read Zoho webhook body", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read request body"})
+		return
+	}
+
+	ctx := types.SetTenantID(c.Request.Context(), tenantID)
+	ctx = types.SetEnvironmentID(ctx, environmentID)
+	c.Request = c.Request.WithContext(ctx)
+
+	zohoIntegration, err := h.integrationFactory.GetZohoBooksIntegration(ctx)
+	if err != nil || zohoIntegration == nil {
+		h.logger.Errorw("Zoho Books integration not available for webhook",
+			"error", err,
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Zoho Books is not configured for this environment"})
+		return
+	}
+
+	conn, webhookSecretPlain, err := zohoIntegration.Client.GetZohoBooksWebhookConfig(ctx)
+	if err != nil || conn == nil {
+		h.logger.Errorw("Zoho Books webhook config unavailable",
+			"error", err,
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Zoho Books is not configured for this environment"})
+		return
+	}
+
+	sig := c.GetHeader(zohowebhook.SignatureHeaderName())
+	zh := zohowebhook.NewHandler(h.logger)
+	deps := &zohowebhook.ServiceDeps{
+		PaymentService:                  h.paymentService,
+		InvoiceService:                  h.invoiceService,
+		CustomerService:                 h.customerService,
+		EntityIntegrationMappingService: h.entityIntegrationMappingService,
+	}
+
+	err = zh.Handle(ctx, conn, c.Request.URL, body, sig, webhookSecretPlain, deps)
+	if err != nil {
+		if errors.Is(err, zohowebhook.ErrInvalidWebhookSignature) ||
+			errors.Is(err, zohowebhook.ErrWebhookSecretNotConfigured) {
+			if errors.Is(err, zohowebhook.ErrWebhookSecretNotConfigured) {
+				h.logger.Errorw("Zoho webhook secret not configured",
+					"tenant_id", tenantID,
+					"environment_id", environmentID)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Webhook secret is not configured"})
+				return
+			}
+			h.logger.Errorw("Zoho webhook signature verification failed",
+				"tenant_id", tenantID,
+				"environment_id", environmentID)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid webhook signature"})
+			return
+		}
+		h.logger.Errorw("Zoho webhook processing failed",
+			"error", err,
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		c.JSON(http.StatusOK, gin.H{"message": "Webhook received"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Webhook processed successfully"})
+}
+
+// paddleWebhookPayload is a minimal struct to parse event_type from the webhook payload
+type paddleWebhookPayload struct {
+	EventType string `json:"event_type"`
+}
+
+func (h *WebhookHandler) HandlePaddleWebhook(c *gin.Context) {
+	handled := false
+	defer func() {
+		if !handled {
+			c.JSON(http.StatusOK, gin.H{
+				"message": "Webhook received",
+			})
+		}
+	}()
+
+	tenantID := c.Param("tenant_id")
+	environmentID := c.Param("environment_id")
+
+	if tenantID == "" || environmentID == "" {
+		h.logger.Errorw("missing tenant_id or environment_id in webhook URL",
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		return
+	}
+
+	// Read the raw request body (must be preserved for signature verification)
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		h.logger.Errorw("failed to read request body", "error", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		handled = true
+		return
+	}
+
+	// Set context with tenant and environment IDs
+	ctx := types.SetTenantID(c.Request.Context(), tenantID)
+	ctx = types.SetEnvironmentID(ctx, environmentID)
+	c.Request = c.Request.WithContext(ctx)
+
+	// Get Paddle integration
+	paddleIntegration, err := h.integrationFactory.GetPaddleIntegration(ctx)
+	if err != nil {
+		h.logger.Errorw("failed to get Paddle integration", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid configuration"})
+		handled = true
+		return
+	}
+
+	// Get connection and decrypted webhook secret
+	conn, err := paddleIntegration.Client.GetConnection(ctx)
+	if err != nil {
+		h.logger.Errorw("failed to get Paddle connection", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Paddle not configured"})
+		handled = true
+		return
+	}
+
+	config, err := paddleIntegration.Client.GetDecryptedPaddleConfig(conn)
+	if err != nil {
+		h.logger.Errorw("failed to get decrypted Paddle config", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid configuration"})
+		handled = true
+		return
+	}
+
+	// Verify signature
+	signature := c.GetHeader("Paddle-Signature")
+	if err := paddleIntegration.Client.VerifyWebhookSignature(ctx, body, signature, config.WebhookSecret); err != nil {
+		h.logger.Errorw("Paddle webhook signature verification failed",
+			"error", err,
+			"tenant_id", tenantID,
+			"environment_id", environmentID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid signature"})
+		handled = true
+		return
+	}
+
+	// Parse event_type from payload
+	var payload paddleWebhookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.logger.Errorw("failed to parse Paddle webhook payload", "error", err)
+		return
+	}
+
+	h.logger.Infow("processing Paddle webhook", "event_type", payload.EventType)
+
+	serviceDeps := &paddlewebhook.ServiceDependencies{
+		CustomerService:                 h.customerService,
+		PaymentService:                  h.paymentService,
+		InvoiceService:                  h.invoiceService,
+		PlanService:                     h.planService,
+		SubscriptionService:             h.subscriptionService,
+		EntityIntegrationMappingService: h.entityIntegrationMappingService,
+		DB:                              h.db,
+	}
+
+	err = paddleIntegration.WebhookHandler.HandleWebhookEvent(ctx, payload.EventType, body, environmentID, serviceDeps)
+	if err != nil {
+		h.logger.Errorw("failed to handle Paddle webhook event",
+			"error", err,
+			"event_type", payload.EventType)
+	}
 }

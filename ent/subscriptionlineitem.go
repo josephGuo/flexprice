@@ -65,16 +65,18 @@ type SubscriptionLineItem struct {
 	Currency string `json:"currency,omitempty"`
 	// BillingPeriod holds the value of the "billing_period" field.
 	BillingPeriod types.BillingPeriod `json:"billing_period,omitempty"`
+	// BillingPeriodCount holds the value of the "billing_period_count" field.
+	BillingPeriodCount int `json:"billing_period_count,omitempty"`
 	// InvoiceCadence holds the value of the "invoice_cadence" field.
 	InvoiceCadence types.InvoiceCadence `json:"invoice_cadence,omitempty"`
-	// TrialPeriod holds the value of the "trial_period" field.
-	TrialPeriod int `json:"trial_period,omitempty"`
 	// StartDate holds the value of the "start_date" field.
 	StartDate *time.Time `json:"start_date,omitempty"`
 	// EndDate holds the value of the "end_date" field.
 	EndDate *time.Time `json:"end_date,omitempty"`
 	// SubscriptionPhaseID holds the value of the "subscription_phase_id" field.
 	SubscriptionPhaseID *string `json:"subscription_phase_id,omitempty"`
+	// AddonAssociationID holds the value of the "addon_association_id" field.
+	AddonAssociationID *string `json:"addon_association_id,omitempty"`
 	// Metadata holds the value of the "metadata" field.
 	Metadata map[string]string `json:"metadata,omitempty"`
 	// CommitmentAmount holds the value of the "commitment_amount" field.
@@ -89,6 +91,8 @@ type SubscriptionLineItem struct {
 	CommitmentTrueUpEnabled bool `json:"commitment_true_up_enabled,omitempty"`
 	// CommitmentWindowed holds the value of the "commitment_windowed" field.
 	CommitmentWindowed bool `json:"commitment_windowed,omitempty"`
+	// CommitmentDuration holds the value of the "commitment_duration" field.
+	CommitmentDuration *types.BillingPeriod `json:"commitment_duration,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SubscriptionLineItemQuery when eager-loading is set.
 	Edges        SubscriptionLineItemEdges `json:"edges"`
@@ -139,9 +143,9 @@ func (*SubscriptionLineItem) scanValues(columns []string) ([]any, error) {
 			values[i] = new(decimal.Decimal)
 		case subscriptionlineitem.FieldCommitmentTrueUpEnabled, subscriptionlineitem.FieldCommitmentWindowed:
 			values[i] = new(sql.NullBool)
-		case subscriptionlineitem.FieldTrialPeriod:
+		case subscriptionlineitem.FieldBillingPeriodCount:
 			values[i] = new(sql.NullInt64)
-		case subscriptionlineitem.FieldID, subscriptionlineitem.FieldTenantID, subscriptionlineitem.FieldStatus, subscriptionlineitem.FieldCreatedBy, subscriptionlineitem.FieldUpdatedBy, subscriptionlineitem.FieldEnvironmentID, subscriptionlineitem.FieldSubscriptionID, subscriptionlineitem.FieldCustomerID, subscriptionlineitem.FieldEntityID, subscriptionlineitem.FieldEntityType, subscriptionlineitem.FieldPlanDisplayName, subscriptionlineitem.FieldPriceID, subscriptionlineitem.FieldPriceType, subscriptionlineitem.FieldMeterID, subscriptionlineitem.FieldMeterDisplayName, subscriptionlineitem.FieldPriceUnitID, subscriptionlineitem.FieldPriceUnit, subscriptionlineitem.FieldDisplayName, subscriptionlineitem.FieldCurrency, subscriptionlineitem.FieldBillingPeriod, subscriptionlineitem.FieldInvoiceCadence, subscriptionlineitem.FieldSubscriptionPhaseID, subscriptionlineitem.FieldCommitmentType:
+		case subscriptionlineitem.FieldID, subscriptionlineitem.FieldTenantID, subscriptionlineitem.FieldStatus, subscriptionlineitem.FieldCreatedBy, subscriptionlineitem.FieldUpdatedBy, subscriptionlineitem.FieldEnvironmentID, subscriptionlineitem.FieldSubscriptionID, subscriptionlineitem.FieldCustomerID, subscriptionlineitem.FieldEntityID, subscriptionlineitem.FieldEntityType, subscriptionlineitem.FieldPlanDisplayName, subscriptionlineitem.FieldPriceID, subscriptionlineitem.FieldPriceType, subscriptionlineitem.FieldMeterID, subscriptionlineitem.FieldMeterDisplayName, subscriptionlineitem.FieldPriceUnitID, subscriptionlineitem.FieldPriceUnit, subscriptionlineitem.FieldDisplayName, subscriptionlineitem.FieldCurrency, subscriptionlineitem.FieldBillingPeriod, subscriptionlineitem.FieldInvoiceCadence, subscriptionlineitem.FieldSubscriptionPhaseID, subscriptionlineitem.FieldAddonAssociationID, subscriptionlineitem.FieldCommitmentType, subscriptionlineitem.FieldCommitmentDuration:
 			values[i] = new(sql.NullString)
 		case subscriptionlineitem.FieldCreatedAt, subscriptionlineitem.FieldUpdatedAt, subscriptionlineitem.FieldStartDate, subscriptionlineitem.FieldEndDate:
 			values[i] = new(sql.NullTime)
@@ -306,17 +310,17 @@ func (_m *SubscriptionLineItem) assignValues(columns []string, values []any) err
 			} else if value.Valid {
 				_m.BillingPeriod = types.BillingPeriod(value.String)
 			}
+		case subscriptionlineitem.FieldBillingPeriodCount:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field billing_period_count", values[i])
+			} else if value.Valid {
+				_m.BillingPeriodCount = int(value.Int64)
+			}
 		case subscriptionlineitem.FieldInvoiceCadence:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field invoice_cadence", values[i])
 			} else if value.Valid {
 				_m.InvoiceCadence = types.InvoiceCadence(value.String)
-			}
-		case subscriptionlineitem.FieldTrialPeriod:
-			if value, ok := values[i].(*sql.NullInt64); !ok {
-				return fmt.Errorf("unexpected type %T for field trial_period", values[i])
-			} else if value.Valid {
-				_m.TrialPeriod = int(value.Int64)
 			}
 		case subscriptionlineitem.FieldStartDate:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -338,6 +342,13 @@ func (_m *SubscriptionLineItem) assignValues(columns []string, values []any) err
 			} else if value.Valid {
 				_m.SubscriptionPhaseID = new(string)
 				*_m.SubscriptionPhaseID = value.String
+			}
+		case subscriptionlineitem.FieldAddonAssociationID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field addon_association_id", values[i])
+			} else if value.Valid {
+				_m.AddonAssociationID = new(string)
+				*_m.AddonAssociationID = value.String
 			}
 		case subscriptionlineitem.FieldMetadata:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -386,6 +397,13 @@ func (_m *SubscriptionLineItem) assignValues(columns []string, values []any) err
 				return fmt.Errorf("unexpected type %T for field commitment_windowed", values[i])
 			} else if value.Valid {
 				_m.CommitmentWindowed = value.Bool
+			}
+		case subscriptionlineitem.FieldCommitmentDuration:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field commitment_duration", values[i])
+			} else if value.Valid {
+				_m.CommitmentDuration = new(types.BillingPeriod)
+				*_m.CommitmentDuration = types.BillingPeriod(value.String)
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -515,11 +533,11 @@ func (_m *SubscriptionLineItem) String() string {
 	builder.WriteString("billing_period=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BillingPeriod))
 	builder.WriteString(", ")
+	builder.WriteString("billing_period_count=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BillingPeriodCount))
+	builder.WriteString(", ")
 	builder.WriteString("invoice_cadence=")
 	builder.WriteString(fmt.Sprintf("%v", _m.InvoiceCadence))
-	builder.WriteString(", ")
-	builder.WriteString("trial_period=")
-	builder.WriteString(fmt.Sprintf("%v", _m.TrialPeriod))
 	builder.WriteString(", ")
 	if v := _m.StartDate; v != nil {
 		builder.WriteString("start_date=")
@@ -533,6 +551,11 @@ func (_m *SubscriptionLineItem) String() string {
 	builder.WriteString(", ")
 	if v := _m.SubscriptionPhaseID; v != nil {
 		builder.WriteString("subscription_phase_id=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.AddonAssociationID; v != nil {
+		builder.WriteString("addon_association_id=")
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
@@ -564,6 +587,11 @@ func (_m *SubscriptionLineItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("commitment_windowed=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CommitmentWindowed))
+	builder.WriteString(", ")
+	if v := _m.CommitmentDuration; v != nil {
+		builder.WriteString("commitment_duration=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

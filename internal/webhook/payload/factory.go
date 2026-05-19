@@ -8,25 +8,22 @@ import (
 
 // PayloadBuilderFactory interface for getting event-specific payload builders
 type PayloadBuilderFactory interface {
-	GetBuilder(eventType string) (PayloadBuilder, error)
+	GetBuilder(eventType types.WebhookEventName) (PayloadBuilder, error)
 }
 
 type payloadBuilderFactory struct {
-	builders map[string]func() PayloadBuilder
+	builders map[types.WebhookEventName]func() PayloadBuilder
 	services *Services
 }
 
 // NewPayloadBuilderFactory creates a new factory with registered builders
 func NewPayloadBuilderFactory(services *Services) PayloadBuilderFactory {
 	f := &payloadBuilderFactory{
-		builders: make(map[string]func() PayloadBuilder),
+		builders: make(map[types.WebhookEventName]func() PayloadBuilder),
 		services: services,
 	}
 
 	// Register invoice builders
-	f.builders[types.WebhookEventInvoiceCreateDraft] = func() PayloadBuilder {
-		return NewInvoicePayloadBuilder(f.services)
-	}
 	f.builders[types.WebhookEventInvoiceUpdateFinalized] = func() PayloadBuilder {
 		return NewInvoicePayloadBuilder(f.services)
 	}
@@ -47,6 +44,9 @@ func NewPayloadBuilderFactory(services *Services) PayloadBuilderFactory {
 
 	// Register subscription builders
 	f.builders[types.WebhookEventSubscriptionCreated] = func() PayloadBuilder {
+		return NewSubscriptionPayloadBuilder(f.services)
+	}
+	f.builders[types.WebhookEventSubscriptionDraftCreated] = func() PayloadBuilder {
 		return NewSubscriptionPayloadBuilder(f.services)
 	}
 	f.builders[types.WebhookEventSubscriptionActivated] = func() PayloadBuilder {
@@ -160,7 +160,7 @@ func NewPayloadBuilderFactory(services *Services) PayloadBuilderFactory {
 }
 
 // GetBuilder returns a payload builder for the given event type
-func (f *payloadBuilderFactory) GetBuilder(eventType string) (PayloadBuilder, error) {
+func (f *payloadBuilderFactory) GetBuilder(eventType types.WebhookEventName) (PayloadBuilder, error) {
 	builderFn, ok := f.builders[eventType]
 	if !ok {
 		return nil, fmt.Errorf("no builder registered for event type: %s", eventType)

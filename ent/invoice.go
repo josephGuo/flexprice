@@ -38,6 +38,8 @@ type Invoice struct {
 	CustomerID string `json:"customer_id,omitempty"`
 	// SubscriptionID holds the value of the "subscription_id" field.
 	SubscriptionID *string `json:"subscription_id,omitempty"`
+	// Subscription owner customer ID; set internally for subscription invoices
+	SubscriptionCustomerID *string `json:"subscription_customer_id,omitempty"`
 	// InvoiceType holds the value of the "invoice_type" field.
 	InvoiceType types.InvoiceType `json:"invoice_type,omitempty"`
 	// InvoiceStatus holds the value of the "invoice_status" field.
@@ -74,6 +76,10 @@ type Invoice struct {
 	VoidedAt *time.Time `json:"voided_at,omitempty"`
 	// FinalizedAt holds the value of the "finalized_at" field.
 	FinalizedAt *time.Time `json:"finalized_at,omitempty"`
+	// IssueDate holds the value of the "issue_date" field.
+	IssueDate *time.Time `json:"issue_date,omitempty"`
+	// LastComputedAt holds the value of the "last_computed_at" field.
+	LastComputedAt *time.Time `json:"last_computed_at,omitempty"`
 	// BillingPeriod holds the value of the "billing_period" field.
 	BillingPeriod *types.BillingPeriod `json:"billing_period,omitempty"`
 	// PeriodStart holds the value of the "period_start" field.
@@ -92,8 +98,12 @@ type Invoice struct {
 	InvoiceNumber *string `json:"invoice_number,omitempty"`
 	// Sequence number for subscription billing periods
 	BillingSequence *int `json:"billing_sequence,omitempty"`
+	// Total prepaid credits applied to this invoice
+	TotalPrepaidCreditsApplied *decimal.Decimal `json:"total_prepaid_credits_applied,omitempty"`
 	// Key for ensuring idempotent invoice creation
 	IdempotencyKey *string `json:"idempotency_key,omitempty"`
+	// ID of the replacement invoice created when this invoice was recalculated after voiding
+	RecalculatedInvoiceID *string `json:"recalculated_invoice_id,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the InvoiceQuery when eager-loading is set.
 	Edges        InvoiceEdges `json:"edges"`
@@ -134,7 +144,7 @@ func (*Invoice) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case invoice.FieldTotalTax, invoice.FieldTotalDiscount:
+		case invoice.FieldTotalTax, invoice.FieldTotalDiscount, invoice.FieldTotalPrepaidCreditsApplied:
 			values[i] = &sql.NullScanner{S: new(decimal.Decimal)}
 		case invoice.FieldMetadata:
 			values[i] = new([]byte)
@@ -142,9 +152,9 @@ func (*Invoice) scanValues(columns []string) ([]any, error) {
 			values[i] = new(decimal.Decimal)
 		case invoice.FieldVersion, invoice.FieldBillingSequence:
 			values[i] = new(sql.NullInt64)
-		case invoice.FieldID, invoice.FieldTenantID, invoice.FieldStatus, invoice.FieldCreatedBy, invoice.FieldUpdatedBy, invoice.FieldEnvironmentID, invoice.FieldCustomerID, invoice.FieldSubscriptionID, invoice.FieldInvoiceType, invoice.FieldInvoiceStatus, invoice.FieldPaymentStatus, invoice.FieldCurrency, invoice.FieldDescription, invoice.FieldBillingPeriod, invoice.FieldInvoicePdfURL, invoice.FieldBillingReason, invoice.FieldInvoiceNumber, invoice.FieldIdempotencyKey:
+		case invoice.FieldID, invoice.FieldTenantID, invoice.FieldStatus, invoice.FieldCreatedBy, invoice.FieldUpdatedBy, invoice.FieldEnvironmentID, invoice.FieldCustomerID, invoice.FieldSubscriptionID, invoice.FieldSubscriptionCustomerID, invoice.FieldInvoiceType, invoice.FieldInvoiceStatus, invoice.FieldPaymentStatus, invoice.FieldCurrency, invoice.FieldDescription, invoice.FieldBillingPeriod, invoice.FieldInvoicePdfURL, invoice.FieldBillingReason, invoice.FieldInvoiceNumber, invoice.FieldIdempotencyKey, invoice.FieldRecalculatedInvoiceID:
 			values[i] = new(sql.NullString)
-		case invoice.FieldCreatedAt, invoice.FieldUpdatedAt, invoice.FieldDueDate, invoice.FieldPaidAt, invoice.FieldVoidedAt, invoice.FieldFinalizedAt, invoice.FieldPeriodStart, invoice.FieldPeriodEnd:
+		case invoice.FieldCreatedAt, invoice.FieldUpdatedAt, invoice.FieldDueDate, invoice.FieldPaidAt, invoice.FieldVoidedAt, invoice.FieldFinalizedAt, invoice.FieldIssueDate, invoice.FieldLastComputedAt, invoice.FieldPeriodStart, invoice.FieldPeriodEnd:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -221,6 +231,13 @@ func (_m *Invoice) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.SubscriptionID = new(string)
 				*_m.SubscriptionID = value.String
+			}
+		case invoice.FieldSubscriptionCustomerID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_customer_id", values[i])
+			} else if value.Valid {
+				_m.SubscriptionCustomerID = new(string)
+				*_m.SubscriptionCustomerID = value.String
 			}
 		case invoice.FieldInvoiceType:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -336,6 +353,20 @@ func (_m *Invoice) assignValues(columns []string, values []any) error {
 				_m.FinalizedAt = new(time.Time)
 				*_m.FinalizedAt = value.Time
 			}
+		case invoice.FieldIssueDate:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field issue_date", values[i])
+			} else if value.Valid {
+				_m.IssueDate = new(time.Time)
+				*_m.IssueDate = value.Time
+			}
+		case invoice.FieldLastComputedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field last_computed_at", values[i])
+			} else if value.Valid {
+				_m.LastComputedAt = new(time.Time)
+				*_m.LastComputedAt = value.Time
+			}
 		case invoice.FieldBillingPeriod:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field billing_period", values[i])
@@ -398,12 +429,26 @@ func (_m *Invoice) assignValues(columns []string, values []any) error {
 				_m.BillingSequence = new(int)
 				*_m.BillingSequence = int(value.Int64)
 			}
+		case invoice.FieldTotalPrepaidCreditsApplied:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field total_prepaid_credits_applied", values[i])
+			} else if value.Valid {
+				_m.TotalPrepaidCreditsApplied = new(decimal.Decimal)
+				*_m.TotalPrepaidCreditsApplied = *value.S.(*decimal.Decimal)
+			}
 		case invoice.FieldIdempotencyKey:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field idempotency_key", values[i])
 			} else if value.Valid {
 				_m.IdempotencyKey = new(string)
 				*_m.IdempotencyKey = value.String
+			}
+		case invoice.FieldRecalculatedInvoiceID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field recalculated_invoice_id", values[i])
+			} else if value.Valid {
+				_m.RecalculatedInvoiceID = new(string)
+				*_m.RecalculatedInvoiceID = value.String
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -480,6 +525,11 @@ func (_m *Invoice) String() string {
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
+	if v := _m.SubscriptionCustomerID; v != nil {
+		builder.WriteString("subscription_customer_id=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
 	builder.WriteString("invoice_type=")
 	builder.WriteString(fmt.Sprintf("%v", _m.InvoiceType))
 	builder.WriteString(", ")
@@ -546,6 +596,16 @@ func (_m *Invoice) String() string {
 		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
+	if v := _m.IssueDate; v != nil {
+		builder.WriteString("issue_date=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	if v := _m.LastComputedAt; v != nil {
+		builder.WriteString("last_computed_at=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
 	if v := _m.BillingPeriod; v != nil {
 		builder.WriteString("billing_period=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
@@ -585,8 +645,18 @@ func (_m *Invoice) String() string {
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
+	if v := _m.TotalPrepaidCreditsApplied; v != nil {
+		builder.WriteString("total_prepaid_credits_applied=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
 	if v := _m.IdempotencyKey; v != nil {
 		builder.WriteString("idempotency_key=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.RecalculatedInvoiceID; v != nil {
+		builder.WriteString("recalculated_invoice_id=")
 		builder.WriteString(*v)
 	}
 	builder.WriteByte(')')

@@ -1,11 +1,11 @@
-module flexprice/go-sdk/examples
+module github.com/flexprice/go-sdk/v2/examples
 
-go 1.23.2
+go 1.22
 
 require (
-	github.com/flexprice/go-sdk-temp v1.0.10
+	github.com/flexprice/go-sdk/v2 v2.0.0
 	github.com/joho/godotenv v1.5.1
-	github.com/samber/lo v1.49.1
 )
 
-require golang.org/x/text v0.21.0 // indirect
+// After merge-custom, run from api/go/examples; parent is the SDK root.
+replace github.com/flexprice/go-sdk/v2 => ../

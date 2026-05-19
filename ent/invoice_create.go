@@ -134,6 +134,20 @@ func (_c *InvoiceCreate) SetNillableSubscriptionID(v *string) *InvoiceCreate {
 	return _c
 }
 
+// SetSubscriptionCustomerID sets the "subscription_customer_id" field.
+func (ic *InvoiceCreate) SetSubscriptionCustomerID(s string) *InvoiceCreate {
+	ic.mutation.SetSubscriptionCustomerID(s)
+	return ic
+}
+
+// SetNillableSubscriptionCustomerID sets the "subscription_customer_id" field if the given value is not nil.
+func (ic *InvoiceCreate) SetNillableSubscriptionCustomerID(s *string) *InvoiceCreate {
+	if s != nil {
+		ic.SetSubscriptionCustomerID(*s)
+	}
+	return ic
+}
+
 // SetInvoiceType sets the "invoice_type" field.
 func (_c *InvoiceCreate) SetInvoiceType(v types.InvoiceType) *InvoiceCreate {
 	_c.mutation.SetInvoiceType(v)
@@ -370,6 +384,34 @@ func (_c *InvoiceCreate) SetNillableFinalizedAt(v *time.Time) *InvoiceCreate {
 	return _c
 }
 
+// SetIssueDate sets the "issue_date" field.
+func (ic *InvoiceCreate) SetIssueDate(t time.Time) *InvoiceCreate {
+	ic.mutation.SetIssueDate(t)
+	return ic
+}
+
+// SetNillableIssueDate sets the "issue_date" field if the given value is not nil.
+func (ic *InvoiceCreate) SetNillableIssueDate(t *time.Time) *InvoiceCreate {
+	if t != nil {
+		ic.SetIssueDate(*t)
+	}
+	return ic
+}
+
+// SetLastComputedAt sets the "last_computed_at" field.
+func (ic *InvoiceCreate) SetLastComputedAt(t time.Time) *InvoiceCreate {
+	ic.mutation.SetLastComputedAt(t)
+	return ic
+}
+
+// SetNillableLastComputedAt sets the "last_computed_at" field if the given value is not nil.
+func (ic *InvoiceCreate) SetNillableLastComputedAt(t *time.Time) *InvoiceCreate {
+	if t != nil {
+		ic.SetLastComputedAt(*t)
+	}
+	return ic
+}
+
 // SetBillingPeriod sets the "billing_period" field.
 func (_c *InvoiceCreate) SetBillingPeriod(v types.BillingPeriod) *InvoiceCreate {
 	_c.mutation.SetBillingPeriod(v)
@@ -488,6 +530,20 @@ func (_c *InvoiceCreate) SetNillableBillingSequence(v *int) *InvoiceCreate {
 	return _c
 }
 
+// SetTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field.
+func (ic *InvoiceCreate) SetTotalPrepaidCreditsApplied(d decimal.Decimal) *InvoiceCreate {
+	ic.mutation.SetTotalPrepaidCreditsApplied(d)
+	return ic
+}
+
+// SetNillableTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field if the given value is not nil.
+func (ic *InvoiceCreate) SetNillableTotalPrepaidCreditsApplied(d *decimal.Decimal) *InvoiceCreate {
+	if d != nil {
+		ic.SetTotalPrepaidCreditsApplied(*d)
+	}
+	return ic
+}
+
 // SetIdempotencyKey sets the "idempotency_key" field.
 func (_c *InvoiceCreate) SetIdempotencyKey(v string) *InvoiceCreate {
 	_c.mutation.SetIdempotencyKey(v)
@@ -500,6 +556,20 @@ func (_c *InvoiceCreate) SetNillableIdempotencyKey(v *string) *InvoiceCreate {
 		_c.SetIdempotencyKey(*v)
 	}
 	return _c
+}
+
+// SetRecalculatedInvoiceID sets the "recalculated_invoice_id" field.
+func (ic *InvoiceCreate) SetRecalculatedInvoiceID(s string) *InvoiceCreate {
+	ic.mutation.SetRecalculatedInvoiceID(s)
+	return ic
+}
+
+// SetNillableRecalculatedInvoiceID sets the "recalculated_invoice_id" field if the given value is not nil.
+func (ic *InvoiceCreate) SetNillableRecalculatedInvoiceID(s *string) *InvoiceCreate {
+	if s != nil {
+		ic.SetRecalculatedInvoiceID(*s)
+	}
+	return ic
 }
 
 // SetID sets the "id" field.
@@ -636,6 +706,10 @@ func (_c *InvoiceCreate) defaults() {
 	if _, ok := _c.mutation.Version(); !ok {
 		v := invoice.DefaultVersion
 		_c.mutation.SetVersion(v)
+	}
+	if _, ok := _c.mutation.TotalPrepaidCreditsApplied(); !ok {
+		v := invoice.DefaultTotalPrepaidCreditsApplied
+		_c.mutation.SetTotalPrepaidCreditsApplied(v)
 	}
 }
 
@@ -786,6 +860,10 @@ func (_c *InvoiceCreate) createSpec() (*Invoice, *sqlgraph.CreateSpec) {
 		_spec.SetField(invoice.FieldSubscriptionID, field.TypeString, value)
 		_node.SubscriptionID = &value
 	}
+	if value, ok := _c.mutation.SubscriptionCustomerID(); ok {
+		_spec.SetField(invoice.FieldSubscriptionCustomerID, field.TypeString, value)
+		_node.SubscriptionCustomerID = &value
+	}
 	if value, ok := _c.mutation.InvoiceType(); ok {
 		_spec.SetField(invoice.FieldInvoiceType, field.TypeString, value)
 		_node.InvoiceType = value
@@ -858,6 +936,14 @@ func (_c *InvoiceCreate) createSpec() (*Invoice, *sqlgraph.CreateSpec) {
 		_spec.SetField(invoice.FieldFinalizedAt, field.TypeTime, value)
 		_node.FinalizedAt = &value
 	}
+	if value, ok := _c.mutation.IssueDate(); ok {
+		_spec.SetField(invoice.FieldIssueDate, field.TypeTime, value)
+		_node.IssueDate = &value
+	}
+	if value, ok := _c.mutation.LastComputedAt(); ok {
+		_spec.SetField(invoice.FieldLastComputedAt, field.TypeTime, value)
+		_node.LastComputedAt = &value
+	}
 	if value, ok := _c.mutation.BillingPeriod(); ok {
 		_spec.SetField(invoice.FieldBillingPeriod, field.TypeString, value)
 		_node.BillingPeriod = &value
@@ -894,9 +980,17 @@ func (_c *InvoiceCreate) createSpec() (*Invoice, *sqlgraph.CreateSpec) {
 		_spec.SetField(invoice.FieldBillingSequence, field.TypeInt, value)
 		_node.BillingSequence = &value
 	}
+	if value, ok := _c.mutation.TotalPrepaidCreditsApplied(); ok {
+		_spec.SetField(invoice.FieldTotalPrepaidCreditsApplied, field.TypeOther, value)
+		_node.TotalPrepaidCreditsApplied = &value
+	}
 	if value, ok := _c.mutation.IdempotencyKey(); ok {
 		_spec.SetField(invoice.FieldIdempotencyKey, field.TypeString, value)
 		_node.IdempotencyKey = &value
+	}
+	if value, ok := _c.mutation.RecalculatedInvoiceID(); ok {
+		_spec.SetField(invoice.FieldRecalculatedInvoiceID, field.TypeString, value)
+		_node.RecalculatedInvoiceID = &value
 	}
 	if nodes := _c.mutation.LineItemsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

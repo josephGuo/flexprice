@@ -80,6 +80,7 @@ func (s *WalletServiceSuite) setupService() {
 		DB:                       s.GetDB(),
 		WalletRepo:               stores.WalletRepo,
 		SubRepo:                  stores.SubscriptionRepo,
+		SubscriptionLineItemRepo: stores.SubscriptionLineItemRepo,
 		PlanRepo:                 stores.PlanRepo,
 		PriceRepo:                stores.PriceRepo,
 		EventRepo:                stores.EventRepo,
@@ -97,26 +98,28 @@ func (s *WalletServiceSuite) setupService() {
 		WalletBalanceAlertPubSub: types.WalletBalanceAlertPubSub{PubSub: pubsub},
 	})
 	s.subsService = NewSubscriptionService(ServiceParams{
-		Logger:                s.GetLogger(),
-		Config:                s.GetConfig(),
-		DB:                    s.GetDB(),
-		SubRepo:               stores.SubscriptionRepo,
-		PlanRepo:              stores.PlanRepo,
-		PriceRepo:             stores.PriceRepo,
-		EventRepo:             stores.EventRepo,
-		MeterRepo:             stores.MeterRepo,
-		CustomerRepo:          stores.CustomerRepo,
-		InvoiceRepo:           stores.InvoiceRepo,
-		EntitlementRepo:       stores.EntitlementRepo,
-		FeatureRepo:           stores.FeatureRepo,
-		CouponRepo:            stores.CouponRepo,
-		CouponAssociationRepo: stores.CouponAssociationRepo,
-		CouponApplicationRepo: stores.CouponApplicationRepo,
-		AddonAssociationRepo:  stores.AddonAssociationRepo,
-		SettingsRepo:          stores.SettingsRepo,
-		EventPublisher:        s.GetPublisher(),
-		WebhookPublisher:      s.GetWebhookPublisher(),
-		AlertLogsRepo:         s.GetStores().AlertLogsRepo,
+		Logger:                   s.GetLogger(),
+		Config:                   s.GetConfig(),
+		DB:                       s.GetDB(),
+		SubRepo:                  stores.SubscriptionRepo,
+		SubscriptionLineItemRepo: stores.SubscriptionLineItemRepo,
+		PlanRepo:                 stores.PlanRepo,
+		PriceRepo:                stores.PriceRepo,
+		EventRepo:                stores.EventRepo,
+		MeterRepo:                stores.MeterRepo,
+		CustomerRepo:             stores.CustomerRepo,
+		InvoiceRepo:              stores.InvoiceRepo,
+		EntitlementRepo:          stores.EntitlementRepo,
+		FeatureRepo:              stores.FeatureRepo,
+		FeatureUsageRepo:         stores.FeatureUsageRepo,
+		CouponRepo:               stores.CouponRepo,
+		CouponAssociationRepo:    stores.CouponAssociationRepo,
+		CouponApplicationRepo:    stores.CouponApplicationRepo,
+		AddonAssociationRepo:     stores.AddonAssociationRepo,
+		SettingsRepo:             stores.SettingsRepo,
+		EventPublisher:           s.GetPublisher(),
+		WebhookPublisher:         s.GetWebhookPublisher(),
+		AlertLogsRepo:            s.GetStores().AlertLogsRepo,
 	})
 }
 
@@ -300,6 +303,7 @@ func (s *WalletServiceSuite) setupTestData() {
 		CurrentPeriodStart: s.testData.now.Add(-24 * time.Hour),
 		CurrentPeriodEnd:   s.testData.now.Add(6 * 24 * time.Hour),
 		Currency:           "usd",
+		SubscriptionType:   types.SubscriptionTypeStandalone,
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
 		SubscriptionStatus: types.SubscriptionStatusActive,
@@ -561,7 +565,12 @@ func (s *WalletServiceSuite) setupWallet() {
 		ConversionRate:      decimal.NewFromFloat(1.0),
 		TopupConversionRate: decimal.NewFromFloat(1.0),
 		WalletStatus:        types.WalletStatusActive,
-		BaseModel:           types.GetDefaultBaseModel(s.GetContext()),
+		Config: types.WalletConfig{
+			AllowedPriceTypes: []types.WalletConfigPriceType{
+				types.WalletConfigPriceTypeUsage,
+			},
+		},
+		BaseModel: types.GetDefaultBaseModel(s.GetContext()),
 	}
 	s.NoError(s.GetStores().WalletRepo.CreateWallet(s.GetContext(), s.testData.wallet))
 }
@@ -803,12 +812,9 @@ func (s *WalletServiceSuite) TestGetWalletBalance() {
 		{
 			name:     "Success - Active wallet with matching currency",
 			walletID: s.testData.wallet.ID,
-			// Usage includes both storage (315 * 0.1 = 31.5) and API calls tiers (assessed across subscriptions)
-			// Given test data, current period usage totals to 123
-			// Wallet balance now only includes usage charges (not unpaid invoices)
-			// Real-time balance: 1000 - 123 = 877
-			expectedRealTimeBalance: decimal.NewFromInt(877), // 1000 - 123 (usage only)
-			expectedCurrentUsage:    decimal.NewFromInt(123), // 123 (usage charges only)
+			// Usage: storage + archive + API from a single pass over subscription line items (no duplicate rows per meter).
+			expectedRealTimeBalance: decimal.RequireFromString("938.5"),
+			expectedCurrentUsage:    decimal.RequireFromString("61.5"),
 		},
 		{
 			name:          "Error - Invalid wallet ID",
@@ -860,6 +866,246 @@ func (s *WalletServiceSuite) TestGetWalletBalance() {
 			s.NotNil(resp.Wallet)
 		})
 	}
+}
+
+func (s *WalletServiceSuite) TestGetWalletBalanceV2_UnpaidInvoicesBranchingByAllowedPriceTypes() {
+	ctx := s.GetContext()
+
+	// Use a fresh customer to avoid interference from suite-level invoices.
+	cust := &customer.Customer{
+		ID:         "cust_wallet_balance_branching",
+		ExternalID: "ext_cust_wallet_balance_branching",
+		Name:       "Wallet Balance Branching Customer",
+		Email:      "wallet-balance-branching@test.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, cust))
+
+	// Helper to create an unpaid finalized invoice with line items.
+	createFinalizedUnpaidInvoice := func(id, currency string, amountPaid, amountRemaining decimal.Decimal, lineItems []*invoice.InvoiceLineItem) {
+		inv := &invoice.Invoice{
+			ID:              id,
+			CustomerID:      cust.ID,
+			Currency:        currency,
+			InvoiceType:     types.InvoiceTypeOneOff,
+			InvoiceStatus:   types.InvoiceStatusFinalized,
+			PaymentStatus:   types.PaymentStatusPending,
+			AmountPaid:      amountPaid,
+			AmountRemaining: amountRemaining,
+			AmountDue:       amountPaid.Add(amountRemaining),
+			BaseModel:       types.GetDefaultBaseModel(ctx),
+			LineItems:       lineItems,
+		}
+		s.NoError(s.GetStores().InvoiceRepo.CreateWithLineItems(ctx, inv))
+	}
+
+	// Invoice fixture:
+	// - inv_ua: AmountRemaining=100, AmountPaid=30
+	//   - usage: amount=80, prepaid_applied=10, discount=5 => unpaidUsageContribution=65
+	//   - fixed: amount=50 (ignored for unpaidUsageCharges)
+	// - inv_ub: AmountRemaining=50, AmountPaid=0
+	//   - usage: amount=50 => unpaidUsageContribution=50
+	// Totals:
+	// - TotalUnpaidAmount = 150
+	// - TotalUnpaidUsageCharges = 115
+	// - TotalPaidInvoiceAmount = 30
+	createFinalizedUnpaidInvoice(
+		"inv_ua",
+		"usd",
+		decimal.NewFromInt(30),
+		decimal.NewFromInt(100),
+		[]*invoice.InvoiceLineItem{
+			{
+				ID:                    "li_ua_usage",
+				CustomerID:            cust.ID,
+				Currency:              "usd",
+				Amount:                decimal.NewFromInt(80),
+				PriceType:             lo.ToPtr(string(types.PRICE_TYPE_USAGE)),
+				PrepaidCreditsApplied: decimal.NewFromInt(10),
+				LineItemDiscount:      decimal.NewFromInt(5),
+				BaseModel:             types.GetDefaultBaseModel(ctx),
+			},
+			{
+				ID:               "li_ua_fixed",
+				CustomerID:       cust.ID,
+				Currency:         "usd",
+				Amount:           decimal.NewFromInt(50),
+				PriceType:        lo.ToPtr(string(types.PRICE_TYPE_FIXED)),
+				LineItemDiscount: decimal.Zero,
+				BaseModel:        types.GetDefaultBaseModel(ctx),
+			},
+		},
+	)
+	createFinalizedUnpaidInvoice(
+		"inv_ub",
+		"usd",
+		decimal.Zero,
+		decimal.NewFromInt(50),
+		[]*invoice.InvoiceLineItem{
+			{
+				ID:                    "li_ub_usage",
+				CustomerID:            cust.ID,
+				Currency:              "usd",
+				Amount:                decimal.NewFromInt(50),
+				PriceType:             lo.ToPtr(string(types.PRICE_TYPE_USAGE)),
+				PrepaidCreditsApplied: decimal.Zero,
+				LineItemDiscount:      decimal.Zero,
+				BaseModel:             types.GetDefaultBaseModel(ctx),
+			},
+		},
+	)
+
+	tests := []struct {
+		name              string
+		walletType        types.WalletType
+		allowedPriceTypes []types.WalletConfigPriceType
+		wantRealtime      decimal.Decimal
+		wantUnpaidAmount  decimal.Decimal
+	}{
+		{
+			name:              "postpaid_ignores_unpaid_invoices",
+			walletType:        types.WalletTypePostPaid,
+			allowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeAll},
+			wantRealtime:      decimal.NewFromInt(1000),
+			wantUnpaidAmount:  decimal.Zero,
+		},
+		{
+			name:              "prepaid_usage_only_uses_usage_formula",
+			walletType:        types.WalletTypePrePaid,
+			allowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeUsage},
+			// pending = TotalUnpaidUsageCharges - TotalPaidInvoiceAmount = 115 - 30 = 85
+			wantRealtime:     decimal.NewFromInt(1000).Sub(decimal.NewFromInt(85)),
+			wantUnpaidAmount: decimal.NewFromInt(115),
+		},
+		{
+			name:              "prepaid_fixed_only_uses_total_unpaid_amount",
+			walletType:        types.WalletTypePrePaid,
+			allowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeFixed},
+			wantRealtime:      decimal.NewFromInt(1000).Sub(decimal.NewFromInt(150)),
+			wantUnpaidAmount:  decimal.NewFromInt(115),
+		},
+		{
+			name:              "prepaid_all_only_uses_total_unpaid_amount",
+			walletType:        types.WalletTypePrePaid,
+			allowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeAll},
+			wantRealtime:      decimal.NewFromInt(1000).Sub(decimal.NewFromInt(150)),
+			wantUnpaidAmount:  decimal.NewFromInt(115),
+		},
+		{
+			name:              "prepaid_all_or_fixed_short_circuits_to_total_unpaid_amount",
+			walletType:        types.WalletTypePrePaid,
+			allowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeAll, types.WalletConfigPriceTypeFixed},
+			wantRealtime:      decimal.NewFromInt(1000).Sub(decimal.NewFromInt(150)),
+			wantUnpaidAmount:  decimal.NewFromInt(115),
+		},
+		{
+			name:              "prepaid_empty_allowed_price_types_uses_usage_formula",
+			walletType:        types.WalletTypePrePaid,
+			allowedPriceTypes: nil, // empty/nil treated as include usage; unpaid branch uses usage-formula (no All, no Fixed)
+			// pending = 115 - 30 = 85
+			wantRealtime:     decimal.NewFromInt(1000).Sub(decimal.NewFromInt(85)),
+			wantUnpaidAmount: decimal.NewFromInt(115),
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			w := &wallet.Wallet{
+				ID:                  fmt.Sprintf("wallet_balance_%s", s.GetUUID()),
+				CustomerID:          cust.ID,
+				Currency:            "usd",
+				WalletType:          tt.walletType,
+				Balance:             decimal.NewFromInt(1000),
+				CreditBalance:       decimal.NewFromInt(1000),
+				ConversionRate:      decimal.NewFromInt(1),
+				TopupConversionRate: decimal.NewFromInt(1),
+				WalletStatus:        types.WalletStatusActive,
+				Config: types.WalletConfig{
+					AllowedPriceTypes: tt.allowedPriceTypes,
+				},
+				BaseModel: types.GetDefaultBaseModel(ctx),
+			}
+			s.NoError(s.GetStores().WalletRepo.CreateWallet(ctx, w))
+
+			resp, err := s.service.GetWalletBalanceV2(ctx, w.ID)
+			s.NoError(err)
+			s.NotNil(resp)
+
+			s.True(tt.wantRealtime.Equal(lo.FromPtr(resp.RealTimeBalance)),
+				"RealTimeBalance mismatch: expected %s, got %s", tt.wantRealtime, lo.FromPtr(resp.RealTimeBalance))
+
+			// For postpaid wallets, UnpaidInvoicesAmount is hard-coded to 0 in response.
+			if tt.walletType == types.WalletTypePostPaid {
+				s.True(decimal.Zero.Equal(lo.FromPtr(resp.UnpaidInvoicesAmount)))
+				s.True(decimal.Zero.Equal(lo.FromPtr(resp.CurrentPeriodUsage)))
+				return
+			}
+
+			// For prepaid wallets, UnpaidInvoicesAmount is reported as TotalUnpaidUsageCharges (even when fixed/all uses TotalUnpaidAmount for deduction).
+			s.True(tt.wantUnpaidAmount.Equal(lo.FromPtr(resp.UnpaidInvoicesAmount)),
+				"UnpaidInvoicesAmount mismatch: expected %s, got %s", tt.wantUnpaidAmount, lo.FromPtr(resp.UnpaidInvoicesAmount))
+		})
+	}
+}
+
+func (s *WalletServiceSuite) TestGetWalletBalanceV2_CurrencyMismatchDoesNotAffectBalance() {
+	ctx := s.GetContext()
+
+	cust := &customer.Customer{
+		ID:         "cust_wallet_balance_currency_mismatch",
+		ExternalID: "ext_cust_wallet_balance_currency_mismatch",
+		Name:       "Wallet Balance Currency Mismatch Customer",
+		Email:      "wallet-balance-currency-mismatch@test.com",
+		BaseModel:  types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().CustomerRepo.Create(ctx, cust))
+
+	w := &wallet.Wallet{
+		ID:                  "wallet_currency_mismatch",
+		CustomerID:          cust.ID,
+		Currency:            "usd",
+		WalletType:          types.WalletTypePrePaid,
+		Balance:             decimal.NewFromInt(1000),
+		CreditBalance:       decimal.NewFromInt(1000),
+		ConversionRate:      decimal.NewFromInt(1),
+		TopupConversionRate: decimal.NewFromInt(1),
+		WalletStatus:        types.WalletStatusActive,
+		Config: types.WalletConfig{
+			AllowedPriceTypes: []types.WalletConfigPriceType{types.WalletConfigPriceTypeFixed}, // forces TotalUnpaidAmount path if any
+		},
+		BaseModel: types.GetDefaultBaseModel(ctx),
+	}
+	s.NoError(s.GetStores().WalletRepo.CreateWallet(ctx, w))
+
+	// Add an unpaid EUR invoice for same customer; should be ignored when calculating USD wallet balance.
+	invEUR := &invoice.Invoice{
+		ID:              "inv_eur_unpaid",
+		CustomerID:      cust.ID,
+		Currency:        "eur",
+		InvoiceType:     types.InvoiceTypeOneOff,
+		InvoiceStatus:   types.InvoiceStatusFinalized,
+		PaymentStatus:   types.PaymentStatusPending,
+		AmountPaid:      decimal.Zero,
+		AmountRemaining: decimal.NewFromInt(999),
+		AmountDue:       decimal.NewFromInt(999),
+		BaseModel:       types.GetDefaultBaseModel(ctx),
+		LineItems: []*invoice.InvoiceLineItem{
+			{
+				ID:        "li_eur_usage",
+				CustomerID: cust.ID,
+				Currency:  "eur",
+				Amount:    decimal.NewFromInt(999),
+				PriceType: lo.ToPtr(string(types.PRICE_TYPE_USAGE)),
+				BaseModel: types.GetDefaultBaseModel(ctx),
+			},
+		},
+	}
+	s.NoError(s.GetStores().InvoiceRepo.CreateWithLineItems(ctx, invEUR))
+
+	resp, err := s.service.GetWalletBalanceV2(ctx, w.ID)
+	s.NoError(err)
+	s.True(decimal.NewFromInt(1000).Equal(lo.FromPtr(resp.RealTimeBalance)),
+		"EUR invoices should not affect USD wallet balance; got %s", lo.FromPtr(resp.RealTimeBalance))
 }
 
 func (s *WalletServiceSuite) TestWalletConversionRateHandling() {
@@ -1533,7 +1779,7 @@ func (s *WalletServiceSuite) TestGetCustomerWallets() {
 		includeRealTimeBalance bool
 		setup                  func()
 		expectedError          bool
-		expectedErrorCode      string
+		expectedErrorCode      ierr.ErrorCode
 		expectedWalletsCount   int
 	}{
 		{
@@ -1874,11 +2120,9 @@ func (s *WalletServiceSuite) TestGetWalletBalanceWithEntitlements() {
 				_, err := s.GetStores().EntitlementRepo.Create(s.GetContext(), entitlement)
 				s.NoError(err)
 			},
-			// current setup; align expectation with computed usage (78)
-			// Wallet balance now only includes usage charges (not unpaid invoices)
-			// Real-time balance: 1000 - 78 = 922
-			expectedRealTimeBalance: decimal.NewFromInt(922), // 1000 - 78 (usage only)
-			expectedCurrentUsage:    decimal.NewFromInt(78),  // 78 (usage charges only)
+			// current setup; align expectation with computed usage (single line-item pass per meter)
+			expectedRealTimeBalance: decimal.NewFromInt(961), // 1000 - 39 (usage only)
+			expectedCurrentUsage:    decimal.NewFromInt(39),
 			wantErr:                 false,
 		},
 		{
@@ -1899,10 +2143,8 @@ func (s *WalletServiceSuite) TestGetWalletBalanceWithEntitlements() {
 				_, err := s.GetStores().EntitlementRepo.Create(s.GetContext(), entitlement)
 				s.NoError(err)
 			},
-			// Wallet balance now only includes usage charges (not unpaid invoices)
-			// Real-time balance: 1000 - 78 = 922
-			expectedRealTimeBalance: decimal.NewFromInt(922), // 1000 - 78 (usage only)
-			expectedCurrentUsage:    decimal.NewFromInt(78),  // 78 (usage charges only)
+			expectedRealTimeBalance: decimal.NewFromInt(961),
+			expectedCurrentUsage:    decimal.NewFromInt(39),
 			wantErr:                 false,
 		},
 		{
@@ -1923,10 +2165,8 @@ func (s *WalletServiceSuite) TestGetWalletBalanceWithEntitlements() {
 				_, err := s.GetStores().EntitlementRepo.Create(s.GetContext(), entitlement)
 				s.NoError(err)
 			},
-			// Wallet balance now only includes usage charges (not unpaid invoices)
-			// Real-time balance: 1000 - 78 = 922
-			expectedRealTimeBalance: decimal.NewFromInt(922), // 1000 - 78 (usage only)
-			expectedCurrentUsage:    decimal.NewFromInt(78),  // 78 (usage charges only)
+			expectedRealTimeBalance: decimal.NewFromInt(961),
+			expectedCurrentUsage:    decimal.NewFromInt(39),
 			wantErr:                 false,
 		},
 		{
@@ -1955,11 +2195,10 @@ func (s *WalletServiceSuite) TestGetWalletBalanceWithEntitlements() {
 				s.NoError(err)
 				s.False(created.IsEnabled, "Entitlement should be disabled")
 			},
-			// Disabled entitlement should not adjust usage; expect same charges as baseline
-			// Wallet balance now only includes usage charges (not unpaid invoices)
-			// Real-time balance: 1000 - 123 = 877
-			expectedRealTimeBalance: decimal.NewFromInt(877), // 1000 - 123 (usage only)
-			expectedCurrentUsage:    decimal.NewFromInt(123), // 123 (usage charges only)
+			// Disabled entitlement should not adjust usage (no entitlement capping).
+			// Wallet balance only includes usage charges; amounts reflect a single pass over line items (no duplicate meter rows).
+			expectedRealTimeBalance: decimal.RequireFromString("938.5"), // 1000 - 61.5
+			expectedCurrentUsage:    decimal.RequireFromString("61.5"),
 			wantErr:                 false,
 		},
 	}
@@ -1985,4 +2224,66 @@ func (s *WalletServiceSuite) TestGetWalletBalanceWithEntitlements() {
 				tt.expectedCurrentUsage, lo.FromPtr(resp.CurrentPeriodUsage))
 		})
 	}
+}
+
+func (s *WalletServiceSuite) TestGetCreditsAvailableBreakdown() {
+	ctx := s.GetContext()
+
+	// Create a test wallet
+	testWallet := &wallet.Wallet{
+		ID:                  "wallet_breakdown_test",
+		CustomerID:          s.testData.customer.ID,
+		Currency:            "usd",
+		Balance:             decimal.NewFromInt(150),
+		CreditBalance:       decimal.NewFromInt(150),
+		ConversionRate:      decimal.NewFromFloat(1.0),
+		TopupConversionRate: decimal.NewFromFloat(1.0),
+		WalletStatus:        types.WalletStatusActive,
+		WalletType:          types.WalletTypePrePaid,
+		BaseModel:           types.GetDefaultBaseModel(ctx),
+	}
+
+	err := s.GetStores().WalletRepo.CreateWallet(ctx, testWallet)
+	s.NoError(err)
+
+	// Create purchased credit transaction
+	purchasedTx := &wallet.Transaction{
+		ID:                "tx_purchased_001",
+		WalletID:          testWallet.ID,
+		CustomerID:        testWallet.CustomerID,
+		Type:              types.TransactionTypeCredit,
+		TransactionReason: types.TransactionReasonPurchasedCreditInvoiced,
+		CreditAmount:      decimal.NewFromInt(50),
+		CreditsAvailable:  decimal.NewFromInt(50),
+		TxStatus:          types.TransactionStatusCompleted,
+		BaseModel:         types.GetDefaultBaseModel(ctx),
+	}
+
+	err = s.GetStores().WalletRepo.CreateTransaction(ctx, purchasedTx)
+	s.NoError(err)
+
+	// Create free credit transaction
+	freeTx := &wallet.Transaction{
+		ID:                "tx_free_001",
+		WalletID:          testWallet.ID,
+		CustomerID:        testWallet.CustomerID,
+		Type:              types.TransactionTypeCredit,
+		TransactionReason: types.TransactionReasonFreeCredit,
+		CreditAmount:      decimal.NewFromInt(100),
+		CreditsAvailable:  decimal.NewFromInt(100),
+		TxStatus:          types.TransactionStatusCompleted,
+		BaseModel:         types.GetDefaultBaseModel(ctx),
+	}
+
+	err = s.GetStores().WalletRepo.CreateTransaction(ctx, freeTx)
+	s.NoError(err)
+
+	// Test GetCreditsAvailableBreakdown
+	breakdown, err := s.service.GetCreditsAvailableBreakdown(ctx, testWallet.ID)
+	s.NoError(err)
+	s.NotNil(breakdown)
+	s.True(breakdown.Purchased.Equal(decimal.NewFromInt(50)),
+		"Expected purchased credits to be 50, got %s", breakdown.Purchased)
+	s.True(breakdown.Free.Equal(decimal.NewFromInt(100)),
+		"Expected free credits to be 100, got %s", breakdown.Free)
 }

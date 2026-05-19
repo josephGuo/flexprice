@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/types"
 	webhookDto "github.com/flexprice/flexprice/internal/webhook/dto"
 	"github.com/samber/lo"
 )
@@ -21,7 +23,7 @@ func NewInvoicePayloadBuilder(services *Services) PayloadBuilder {
 }
 
 // BuildPayload builds the webhook payload for invoice events
-func (b *InvoicePayloadBuilder) BuildPayload(ctx context.Context, eventType string, data json.RawMessage) (json.RawMessage, error) {
+func (b *InvoicePayloadBuilder) BuildPayload(ctx context.Context, eventType types.WebhookEventName, data json.RawMessage) (json.RawMessage, error) {
 	var parsedPayload webhookDto.InternalInvoiceEvent
 
 	err := json.Unmarshal(data, &parsedPayload)
@@ -44,17 +46,27 @@ func (b *InvoicePayloadBuilder) BuildPayload(ctx context.Context, eventType stri
 
 	// Get invoice details
 	invoice, err := b.services.InvoiceService.GetInvoice(ctx, invoiceID)
-	if err != nil {
+	if err != nil && !ierr.IsNotFound(err) {
 		return nil, err
 	}
 
+	// TODO: this is a temporary fix to handle the invoice not found error.
+	if ierr.IsNotFound(err) {
+		time.Sleep(15 * time.Second)
+		invoice, err = b.services.InvoiceService.GetInvoice(ctx, invoiceID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// inject the invoice pdf url into the invoice response
-	pdfUrl, err := b.services.InvoiceService.GetInvoicePDFUrl(ctx, invoiceID)
+	pdfUrl, err := b.services.InvoiceService.GetInvoicePDFUrl(ctx, invoiceID, false)
 	if err != nil {
 		b.services.Sentry.CaptureException(err)
 
 	}
 	invoice.InvoicePDFURL = lo.ToPtr(pdfUrl)
+	invoice.Subscription = nil
 
 	payload := webhookDto.NewInvoiceWebhookPayload(invoice, eventType)
 

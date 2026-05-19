@@ -25,16 +25,33 @@ type InvoiceLineItem struct {
 	MeterDisplayName *string               `json:"meter_display_name,omitempty"`
 	PriceUnitID      *string               `json:"price_unit_id,omitempty"`
 	PriceUnit        *string               `json:"price_unit,omitempty"`
-	PriceUnitAmount  *decimal.Decimal      `json:"price_unit_amount,omitempty"`
+	PriceUnitAmount  *decimal.Decimal      `json:"price_unit_amount,omitempty" swaggertype:"string"`
 	DisplayName      *string               `json:"display_name,omitempty"`
-	Amount           decimal.Decimal       `json:"amount"`
-	Quantity         decimal.Decimal       `json:"quantity"`
+	Amount           decimal.Decimal       `json:"amount" swaggertype:"string"`
+	Quantity         decimal.Decimal       `json:"quantity" swaggertype:"string"`
 	Currency         string                `json:"currency"`
 	PeriodStart      *time.Time            `json:"period_start,omitempty"`
-	PeriodEnd        *time.Time            `json:"period_end,omitempty"`
+	PeriodEnd        *time.Time            `json:"period_end,omitempty" `
 	Metadata         types.Metadata        `json:"metadata,omitempty"`
 	EnvironmentID    string                `json:"environment_id"`
 	CommitmentInfo   *types.CommitmentInfo `json:"commitment_info,omitempty"`
+
+	// prepaid_credits_applied is the amount in invoice currency reduced from this line item due to prepaid credits application.
+	PrepaidCreditsApplied decimal.Decimal `json:"prepaid_credits_applied" swaggertype:"string"`
+
+	// line_item_discount is the discount amount in invoice currency applied directly to this line item.
+	LineItemDiscount decimal.Decimal `json:"line_item_discount" swaggertype:"string"`
+
+	// invoice_level_discount is the discount amount in invoice currency applied to all line items on the invoice.
+	InvoiceLevelDiscount decimal.Decimal `json:"invoice_level_discount" swaggertype:"string"`
+
+	// adjusted_entitlement_quantity is the entitlement-covered portion deducted from raw usage.
+	// Nil when no entitlement was applied. Raw usage = Quantity + AdjustedEntitlementQuantity.
+	AdjustedEntitlementQuantity *decimal.Decimal `json:"adjusted_entitlement_quantity,omitempty" swaggertype:"string"`
+
+	// sub_line_item_id links this invoice line item to the subscription_line_item that generated it.
+	SubscriptionLineItemID *string `json:"subscription_line_item_id,omitempty"`
+
 	types.BaseModel
 }
 
@@ -45,29 +62,34 @@ func (i *InvoiceLineItem) FromEnt(e *ent.InvoiceLineItem) *InvoiceLineItem {
 	}
 
 	return &InvoiceLineItem{
-		ID:               e.ID,
-		InvoiceID:        e.InvoiceID,
-		CustomerID:       e.CustomerID,
-		SubscriptionID:   e.SubscriptionID,
-		EntityID:         e.EntityID,
-		EntityType:       lo.ToPtr(string(lo.FromPtr(e.EntityType))),
-		PlanDisplayName:  e.PlanDisplayName,
-		PriceID:          e.PriceID,
-		PriceType:        lo.ToPtr(string(lo.FromPtr(e.PriceType))),
-		MeterID:          e.MeterID,
-		MeterDisplayName: e.MeterDisplayName,
-		PriceUnitID:      e.PriceUnitID,
-		PriceUnit:        e.PriceUnit,
-		PriceUnitAmount:  e.PriceUnitAmount,
-		DisplayName:      e.DisplayName,
-		Amount:           e.Amount,
-		Quantity:         e.Quantity,
-		Currency:         e.Currency,
-		PeriodStart:      e.PeriodStart,
-		PeriodEnd:        e.PeriodEnd,
-		Metadata:         e.Metadata,
-		CommitmentInfo:   e.CommitmentInfo,
-		EnvironmentID:    e.EnvironmentID,
+		ID:                          e.ID,
+		InvoiceID:                   e.InvoiceID,
+		CustomerID:                  e.CustomerID,
+		SubscriptionID:              e.SubscriptionID,
+		EntityID:                    e.EntityID,
+		EntityType:                  lo.ToPtr(string(lo.FromPtr(e.EntityType))),
+		PlanDisplayName:             e.PlanDisplayName,
+		PriceID:                     e.PriceID,
+		PriceType:                   lo.ToPtr(string(lo.FromPtr(e.PriceType))),
+		MeterID:                     e.MeterID,
+		MeterDisplayName:            e.MeterDisplayName,
+		PriceUnitID:                 e.PriceUnitID,
+		PriceUnit:                   e.PriceUnit,
+		PriceUnitAmount:             e.PriceUnitAmount,
+		DisplayName:                 e.DisplayName,
+		Amount:                      e.Amount,
+		Quantity:                    e.Quantity,
+		Currency:                    e.Currency,
+		PeriodStart:                 e.PeriodStart,
+		PeriodEnd:                   e.PeriodEnd,
+		Metadata:                    e.Metadata,
+		CommitmentInfo:              e.CommitmentInfo,
+		EnvironmentID:               e.EnvironmentID,
+		PrepaidCreditsApplied:       lo.FromPtrOr(e.PrepaidCreditsApplied, decimal.Zero),
+		LineItemDiscount:            lo.FromPtrOr(e.LineItemDiscount, decimal.Zero),
+		InvoiceLevelDiscount:        lo.FromPtrOr(e.InvoiceLevelDiscount, decimal.Zero),
+		AdjustedEntitlementQuantity: e.AdjustedEntitlementQuantity,
+		SubscriptionLineItemID:      e.SubscriptionLineItemID,
 		BaseModel: types.BaseModel{
 			TenantID:  e.TenantID,
 			Status:    types.Status(e.Status),
@@ -95,5 +117,48 @@ func (i *InvoiceLineItem) Validate() error {
 		}
 	}
 
+	if i.PrepaidCreditsApplied.IsNegative() {
+		return ierr.NewError("invoice line item validation failed").
+			WithHint("prepaid_credits_applied must be non-negative").
+			WithReportableDetails(map[string]any{
+				"prepaid_credits_applied": i.PrepaidCreditsApplied.String(),
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	if i.LineItemDiscount.IsNegative() {
+		return ierr.NewError("invoice line item validation failed").
+			WithHint("line_item_discount must be non-negative").
+			WithReportableDetails(map[string]any{
+				"line_item_discount": i.LineItemDiscount.String(),
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	// Validate invoice_level_discount: must be non-negative (zero is allowed, meaning no discount)
+	if i.InvoiceLevelDiscount.IsNegative() {
+		return ierr.NewError("invoice line item validation failed").
+			WithHint("invoice_level_discount must be non-negative").
+			WithReportableDetails(map[string]any{
+				"invoice_level_discount": i.InvoiceLevelDiscount.String(),
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	if i.AdjustedEntitlementQuantity != nil && i.AdjustedEntitlementQuantity.IsNegative() {
+		return ierr.NewError("invoice line item validation failed").
+			WithHint("adjusted_entitlement_quantity must be non-negative").
+			WithReportableDetails(map[string]any{
+				"adjusted_entitlement_quantity": i.AdjustedEntitlementQuantity.String(),
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
 	return nil
+}
+
+// LineItemFromEnt converts an Ent InvoiceLineItem to the domain model.
+// Use this in repository code; it delegates to the existing receiver method.
+func LineItemFromEnt(e *ent.InvoiceLineItem) *InvoiceLineItem {
+	return new(InvoiceLineItem).FromEnt(e)
 }

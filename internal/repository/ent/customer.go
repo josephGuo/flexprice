@@ -73,7 +73,6 @@ func (r *customerRepository) Create(ctx context.Context, c *domainCustomer.Custo
 		SetCreatedAt(c.CreatedAt).
 		SetUpdatedAt(c.UpdatedAt).
 		SetCreatedBy(c.CreatedBy).
-		SetNillableParentCustomerID(c.ParentCustomerID).
 		SetUpdatedBy(c.UpdatedBy).
 		SetEnvironmentID(c.EnvironmentID).
 		Save(ctx)
@@ -203,7 +202,12 @@ func (r *customerRepository) GetByLookupKey(ctx context.Context, lookupKey strin
 	}
 
 	SetSpanSuccess(span)
-	return domainCustomer.FromEnt(c), nil
+
+	customer := domainCustomer.FromEnt(c)
+	// Set cache
+	r.SetCache(ctx, customer)
+
+	return customer, nil
 }
 
 func (r *customerRepository) List(ctx context.Context, filter *types.CustomerFilter) ([]*domainCustomer.Customer, error) {
@@ -271,36 +275,42 @@ func (r *customerRepository) Count(ctx context.Context, filter *types.CustomerFi
 }
 
 func (r *customerRepository) ListAll(ctx context.Context, filter *types.CustomerFilter) ([]*domainCustomer.Customer, error) {
-	client := r.client.Reader(ctx)
-
-	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "customer", "list_all", map[string]interface{}{
 		"filter": filter,
 	})
 	defer FinishSpan(span)
 
-	query := client.Customer.Query()
-	query = ApplyBaseFilters(ctx, query, filter, r.queryOpts)
-
-	var err error
-	query, err = r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
-	if err != nil {
-		SetSpanError(span, err)
-		return nil, ierr.WithError(err).
-			WithHint("Failed to apply query options").
-			Mark(ierr.ErrDatabase)
+	if filter == nil {
+		filter = types.NewNoLimitCustomerFilter()
+	}
+	if filter.QueryFilter == nil {
+		filter.QueryFilter = types.NewNoLimitQueryFilter()
 	}
 
-	customers, err := query.All(ctx)
-	if err != nil {
-		SetSpanError(span, err)
-		return nil, ierr.WithError(err).
-			WithHint("Failed to list customers").
-			Mark(ierr.ErrDatabase)
+	const batchSize = 1000
+	batchLimit := batchSize
+	offset := 0
+	filter.QueryFilter.Limit = &batchLimit
+	filter.QueryFilter.Offset = &offset
+
+	var fetchedCustomers []*domainCustomer.Customer
+	for {
+		batch, err := r.List(ctx, filter)
+		if err != nil {
+			SetSpanError(span, err)
+			return nil, err
+		}
+
+		fetchedCustomers = append(fetchedCustomers, batch...)
+		if len(batch) < batchSize {
+			break
+		}
+		offset += batchSize
+		filter.QueryFilter.Offset = &offset
 	}
 
 	SetSpanSuccess(span)
-	return domainCustomer.FromEntList(customers), nil
+	return fetchedCustomers, nil
 }
 
 func (r *customerRepository) Update(ctx context.Context, c *domainCustomer.Customer) error {
@@ -335,7 +345,6 @@ func (r *customerRepository) Update(ctx context.Context, c *domainCustomer.Custo
 		SetAddressPostalCode(c.AddressPostalCode).
 		SetAddressCountry(c.AddressCountry).
 		SetMetadata(c.Metadata).
-		SetNillableParentCustomerID(c.ParentCustomerID).
 		SetUpdatedAt(time.Now().UTC()).
 		SetUpdatedBy(types.GetUserID(ctx)).
 		Save(ctx)
@@ -463,24 +472,12 @@ func (o CustomerQueryOptions) ApplyPaginationFilter(query CustomerQuery, limit i
 	return query
 }
 
+// GetFieldName returns the ent field name for customer; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o CustomerQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return customer.FieldCreatedAt
-	case "updated_at":
-		return customer.FieldUpdatedAt
-	case "name":
-		return customer.FieldName
-	case "email":
-		return customer.FieldEmail
-	case "external_id":
-		return customer.FieldExternalID
-	case "status":
-		return customer.FieldStatus
-	default:
-		//unknown field
-		return ""
+	if customer.ValidColumn(field) {
+		return field
 	}
+	return ""
 }
 
 func (o CustomerQueryOptions) GetFieldResolver(field string) (string, error) {
@@ -502,10 +499,6 @@ func (o CustomerQueryOptions) applyEntityQueryOptions(_ context.Context, f *type
 		query = query.Where(customer.ExternalID(f.ExternalID))
 	}
 
-	if len(f.ParentCustomerIDs) > 0 {
-		query = query.Where(customer.ParentCustomerIDIn(f.ParentCustomerIDs...))
-	}
-
 	if f.Email != "" {
 		query = query.Where(customer.Email(f.Email))
 	}
@@ -516,6 +509,15 @@ func (o CustomerQueryOptions) applyEntityQueryOptions(_ context.Context, f *type
 
 	if len(f.ExternalIDs) > 0 {
 		query = query.Where(customer.ExternalIDIn(f.ExternalIDs...))
+	}
+
+	query, err = dsl.ApplyMetadataFilter[CustomerQuery, predicate.Customer](
+		query,
+		f.MetadataFilter,
+		func(p dsl.Predicate) predicate.Customer { return predicate.Customer(p) },
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	if f.Filters != nil {

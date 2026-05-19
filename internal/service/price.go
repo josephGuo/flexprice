@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
+	"github.com/flexprice/flexprice/internal/domain/events"
 	"github.com/flexprice/flexprice/internal/domain/price"
 	"github.com/flexprice/flexprice/internal/domain/priceunit"
 	ierr "github.com/flexprice/flexprice/internal/errors"
@@ -28,8 +29,11 @@ type PriceService interface {
 	DeletePrice(ctx context.Context, id string, req dto.DeletePriceRequest) error
 	CalculateCost(ctx context.Context, price *price.Price, quantity decimal.Decimal) decimal.Decimal
 
-	// CalculateBucketedCost calculates cost for bucketed max values where each value represents max in its time bucket
+	// CalculateBucketedCost calculates cost for bucketed values where each value is priced independently
 	CalculateBucketedCost(ctx context.Context, price *price.Price, bucketedValues []decimal.Decimal) decimal.Decimal
+
+	// CalculateCostFromUsageResults calculates total cost by pricing each usage result independently (e.g. per-group tiered pricing).
+	CalculateCostFromUsageResults(ctx context.Context, price *price.Price, results []events.UsageResult) decimal.Decimal
 
 	// CalculateCostWithBreakup calculates the cost for a given price and quantity
 	// and returns detailed information about the calculation
@@ -59,6 +63,27 @@ func (s *priceService) CreatePrice(ctx context.Context, req dto.CreatePriceReque
 	if !req.SkipEntityValidation {
 		if err := s.validateEntityExists(ctx, req.EntityType, req.EntityID); err != nil {
 			return nil, err
+		}
+
+		// Validate that the entity has less than 1000 active prices
+		filter := types.NewNoLimitPriceFilter().
+			WithEntityIDs([]string{req.EntityID}).
+			WithStatus(types.StatusPublished).
+			WithEntityType(req.EntityType)
+
+		count, err := s.PriceRepo.Count(ctx, filter)
+		if err != nil {
+			return nil, err
+		}
+		if count >= price.MAX_ACTIVE_PRICES {
+			return nil, ierr.NewError("entity has too many active prices").
+				WithHint("The specified entity has too many active prices").
+				WithReportableDetails(map[string]interface{}{
+					"entity_id":   req.EntityID,
+					"entity_type": req.EntityType,
+					"count":       count,
+				}).
+				Mark(ierr.ErrValidation)
 		}
 	}
 
@@ -104,6 +129,28 @@ func (s *priceService) preparePriceForCreation(ctx context.Context, req *dto.Cre
 	p, err := req.ToPrice(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validate the price domain object
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Validate meter for USAGE prices: must be set and must exist
+	if p.Type == types.PRICE_TYPE_USAGE {
+		if p.MeterID == "" {
+			return nil, ierr.NewError("meter_id is required when type is USAGE").
+				WithHint("Please select a metered feature to set up usage pricing").
+				WithReportableDetails(map[string]interface{}{
+					"type": p.Type,
+				}).
+				Mark(ierr.ErrValidation)
+		}
+
+		if _, err := s.MeterRepo.GetMeter(ctx, p.MeterID); err != nil {
+			return nil, err
+		}
+
 	}
 
 	// Apply price unit conversion if price type is CUSTOM
@@ -219,8 +266,72 @@ func (s *priceService) validateEntityExists(ctx context.Context, entityType type
 	return nil
 }
 
+// validateBulkPriceEntityLimits validates that entities don't exceed the maximum number of active prices
+// when creating bulk prices. It checks each unique entity and ensures that the total count of existing
+// plus new prices doesn't exceed MAX_ACTIVE_PRICES.
+func (s *priceService) validateBulkPriceEntityLimits(ctx context.Context, items []dto.CreatePriceRequest) error {
+	// Create a map of entityID -> entityType using lo
+	entityIDToType := lo.SliceToMap(items, func(priceReq dto.CreatePriceRequest) (string, types.PriceEntityType) {
+		return priceReq.EntityID, priceReq.EntityType
+	})
+
+	// Group prices by entityID to count how many prices are being added for each entity
+	entityGroups := lo.GroupBy(items, func(priceReq dto.CreatePriceRequest) string {
+		return priceReq.EntityID
+	})
+
+	// Validate price limit for each unique entity
+	for entityID, entityType := range entityIDToType {
+		// Check if we should skip validation (check first item with this entityID)
+		itemsForEntity := entityGroups[entityID]
+
+		firstItem := itemsForEntity[0]
+		if firstItem.SkipEntityValidation {
+			continue
+		}
+
+		// Count existing active prices for this entity
+		filter := types.NewNoLimitPriceFilter().
+			WithEntityIDs([]string{entityID}).
+			WithStatus(types.StatusPublished).
+			WithEntityType(entityType)
+
+		existingCount, err := s.PriceRepo.Count(ctx, filter)
+		if err != nil {
+			return err
+		}
+
+		// Count how many new prices are being added for this entity
+		newPricesCount := len(entityGroups[entityID])
+
+		// Check if adding these prices would exceed the limit
+		// If existingCount + newPricesCount > MAX_ACTIVE_PRICES, reject
+		// This allows exactly MAX_ACTIVE_PRICES total (e.g., 999 existing + 1 new = 1000, which is allowed)
+		if existingCount+newPricesCount > price.MAX_ACTIVE_PRICES {
+			return ierr.NewError("entity has too many active prices").
+				WithHint("The specified entity has too many active prices").
+				WithReportableDetails(map[string]interface{}{
+					"entity_id":        entityID,
+					"entity_type":      entityType,
+					"existing_count":   existingCount,
+					"new_prices_count": newPricesCount,
+					"total_count":      existingCount + newPricesCount,
+					"max_allowed":      price.MAX_ACTIVE_PRICES,
+				}).
+				Mark(ierr.ErrValidation)
+		}
+	}
+
+	return nil
+}
+
 func (s *priceService) CreateBulkPrice(ctx context.Context, req dto.CreateBulkPriceRequest) (*dto.CreateBulkPriceResponse, error) {
 	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Validate price limit for each unique entity
+	if err := s.validateBulkPriceEntityLimits(ctx, req.Items); err != nil {
 		return nil, err
 	}
 
@@ -264,7 +375,7 @@ func (s *priceService) CreateBulkPrice(ctx context.Context, req dto.CreateBulkPr
 	}
 
 	// Sync prices to integrations if available and prices are for a plan
-	s.Logger.Debugw("Bulk price sync check",
+	s.Logger.DebugwCtx(ctx, "Bulk price sync check",
 		"response_nil", response == nil,
 		"response_items_count", func() int {
 			if response == nil {
@@ -322,7 +433,7 @@ func (s *priceService) GetPrice(ctx context.Context, id string) (*dto.PriceRespo
 		meterService := NewMeterService(s.MeterRepo)
 		meter, err := meterService.GetMeter(ctx, price.MeterID)
 		if err != nil {
-			s.Logger.Warnw("failed to fetch meter", "meter_id", price.MeterID, "error", err)
+			s.Logger.WarnwCtx(ctx, "failed to fetch meter", "meter_id", price.MeterID, "error", err)
 			return nil, err
 		}
 		response.Meter = dto.ToMeterResponse(meter)
@@ -332,7 +443,7 @@ func (s *priceService) GetPrice(ctx context.Context, id string) (*dto.PriceRespo
 		groupService := NewGroupService(s.ServiceParams)
 		group, err := groupService.GetGroup(ctx, price.GroupID)
 		if err != nil {
-			s.Logger.Warnw("failed to fetch group", "group_id", price.GroupID, "error", err)
+			s.Logger.WarnwCtx(ctx, "failed to fetch group", "group_id", price.GroupID, "error", err)
 			// Don't fail the request if group fetch fails, just continue
 		} else {
 			response.Group = group
@@ -343,7 +454,7 @@ func (s *priceService) GetPrice(ctx context.Context, id string) (*dto.PriceRespo
 		priceUnitService := NewPriceUnitService(s.ServiceParams)
 		priceUnit, err := priceUnitService.GetPriceUnit(ctx, lo.FromPtr(price.PriceUnitID))
 		if err != nil {
-			s.Logger.Warnw("failed to fetch price unit", "price_unit", *price.PriceUnit, "error", err)
+			s.Logger.WarnwCtx(ctx, "failed to fetch price unit", "price_unit", *price.PriceUnit, "error", err)
 		} else {
 			response.PricingUnit = priceUnit
 		}
@@ -486,7 +597,7 @@ func (s *priceService) GetPrices(ctx context.Context, filter *types.PriceFilter)
 			metersByID[m.ID] = m
 		}
 
-		s.Logger.Debugw("fetched meters for prices", "count", len(metersResponse.Items))
+		s.Logger.DebugwCtx(ctx, "fetched meters for prices", "count", len(metersResponse.Items))
 	}
 
 	// Collect entity IDs based on entity type for efficient bulk fetching
@@ -570,7 +681,7 @@ func (s *priceService) GetPrices(ctx context.Context, filter *types.PriceFilter)
 
 		groupsResponse, err := groupService.ListGroups(ctx, groupFilter)
 		if err != nil {
-			s.Logger.Warnw("failed to fetch groups in bulk", "error", err)
+			s.Logger.WarnwCtx(ctx, "failed to fetch groups in bulk", "error", err)
 			// Don't fail the request, just continue without groups
 			groupsByID = make(map[string]*dto.GroupResponse)
 		} else {
@@ -594,7 +705,7 @@ func (s *priceService) GetPrices(ctx context.Context, filter *types.PriceFilter)
 
 		priceUnitsResponse, err := priceUnitService.ListPriceUnits(ctx, priceUnitFilter)
 		if err != nil {
-			s.Logger.Warnw("failed to fetch price units in bulk", "error", err)
+			s.Logger.WarnwCtx(ctx, "failed to fetch price units in bulk", "error", err)
 			// Don't fail the request, just continue without price units
 			priceUnitsByID = make(map[string]*dto.PriceUnitResponse)
 		} else {
@@ -709,19 +820,42 @@ func (s *priceService) UpdatePrice(ctx context.Context, id string, req dto.Updat
 			terminationEndDate = *req.EffectiveFrom
 		}
 
+		// Effective date must not be before the price's start date (avoids end_date < start_date)
+		if existingPrice.StartDate != nil && terminationEndDate.Before(lo.FromPtr(existingPrice.StartDate)) {
+			return nil, ierr.NewError("effective date must be on or after price start date").
+				WithHint("The effective date for terminating this price cannot be before the price's start date").
+				WithReportableDetails(map[string]interface{}{
+					"price_id":         id,
+					"price_start_date": existingPrice.StartDate,
+					"effective_from":   terminationEndDate,
+				}).
+				Mark(ierr.ErrValidation)
+		}
+
 		if err := s.DB.WithTx(ctx, func(ctx context.Context) error {
+			// bumpSequence when end date is changed
+			var bumpSequence bool
+			if existingPrice.EndDate == nil && !terminationEndDate.IsZero() {
+				bumpSequence = true
+			} else if existingPrice.EndDate != nil && !terminationEndDate.Equal(*existingPrice.EndDate) {
+				bumpSequence = true
+			}
+
 			// Terminate the existing price
 			existingPrice.EndDate = &terminationEndDate
 
-			// Validate group if provided
-			if req.GroupID != "" {
-				existingPrice.GroupID = req.GroupID
-				if err := s.validateGroup(ctx, []*price.Price{existingPrice}); err != nil {
-					return err
+			// Handle group update: nil = don't change, "" = clear, "group-id" = set and validate
+			if req.GroupID != nil {
+				existingPrice.GroupID = *req.GroupID
+				// Only validate if setting to a non-empty group
+				if *req.GroupID != "" {
+					if err := s.validateGroup(ctx, []*price.Price{existingPrice}); err != nil {
+						return err
+					}
 				}
 			}
 
-			if err := s.PriceRepo.Update(ctx, existingPrice); err != nil {
+			if err := s.PriceRepo.Update(ctx, existingPrice, bumpSequence); err != nil {
 				return err
 			}
 
@@ -740,7 +874,7 @@ func (s *priceService) UpdatePrice(ctx context.Context, id string, req dto.Updat
 			return nil, err
 		}
 
-		s.Logger.Infow("price updated with termination and recreation",
+		s.Logger.InfowCtx(ctx, "price updated with termination and recreation",
 			"old_price_id", existingPrice.ID,
 			"new_price_id", newPriceResp.ID,
 			"termination_end_date", terminationEndDate,
@@ -762,6 +896,8 @@ func (s *priceService) UpdatePrice(ctx context.Context, id string, req dto.Updat
 	} else {
 		// No critical fields - simple update
 
+		bumpSequence := false
+
 		// Update non-critical fields
 		if req.LookupKey != "" {
 			existingPrice.LookupKey = req.LookupKey
@@ -777,17 +913,21 @@ func (s *priceService) UpdatePrice(ctx context.Context, id string, req dto.Updat
 		}
 		if req.EffectiveFrom != nil {
 			existingPrice.EndDate = req.EffectiveFrom
+			bumpSequence = true
 		}
 
-		if req.GroupID != "" {
-			existingPrice.GroupID = req.GroupID
-			if err := s.validateGroup(ctx, []*price.Price{existingPrice}); err != nil {
-				return nil, err
+		// Handle group update: nil = don't change, "" = clear, "group-id" = set and validate
+		if req.GroupID != nil {
+			existingPrice.GroupID = *req.GroupID
+			// Only validate if setting to a non-empty group
+			if *req.GroupID != "" {
+				if err := s.validateGroup(ctx, []*price.Price{existingPrice}); err != nil {
+					return nil, err
+				}
 			}
 		}
 
-		// Update the price in database
-		if err := s.PriceRepo.Update(ctx, existingPrice); err != nil {
+		if err := s.PriceRepo.Update(ctx, existingPrice, bumpSequence); err != nil {
 			return nil, err
 		}
 
@@ -826,10 +966,10 @@ func (s *priceService) DeletePrice(ctx context.Context, id string, req dto.Delet
 		endDate = time.Now().UTC()
 	}
 
-	// Validate end date is after start date
+	// Validate end date is on or after start date
 	if price.StartDate != nil && price.StartDate.After(endDate) {
-		return ierr.NewError("end date must be after start date").
-			WithHint("The termination date must be after the price's start date").
+		return ierr.NewError("end date must be on or after start date").
+			WithHint("The termination date must be on or after the price's start date").
 			WithReportableDetails(map[string]interface{}{
 				"price_id":   id,
 				"start_date": price.StartDate,
@@ -840,7 +980,8 @@ func (s *priceService) DeletePrice(ctx context.Context, id string, req dto.Delet
 
 	price.EndDate = &endDate
 
-	if err := s.PriceRepo.Update(ctx, price); err != nil {
+	// bumpSequence=true: DeletePrice is a termination event (end_date being set).
+	if err := s.PriceRepo.Update(ctx, price, true); err != nil {
 		return err
 	}
 
@@ -914,9 +1055,24 @@ func (s *priceService) CalculateCost(ctx context.Context, price *price.Price, qu
 	return s.calculateSingletonCost(ctx, price, quantity)
 }
 
-// CalculateBucketedCost calculates cost for bucketed max values where each value represents max in its time bucket
+// CalculateBucketedCost calculates cost for bucketed values (from []decimal.Decimal).
+// For tiered pricing, each bucket value is priced through tiers independently.
 func (s *priceService) CalculateBucketedCost(ctx context.Context, price *price.Price, bucketedValues []decimal.Decimal) decimal.Decimal {
 	return s.calculateBucketedMaxCost(ctx, price, bucketedValues)
+}
+
+// CalculateCostFromUsageResults sums cost by pricing each usage result independently.
+// For tiered pricing this applies tiers per result (e.g. per group per bucket), not on aggregated usage.
+func (s *priceService) CalculateCostFromUsageResults(ctx context.Context, price *price.Price, results []events.UsageResult) decimal.Decimal {
+	totalCost := decimal.Zero
+	for _, r := range results {
+		if price.BillingModel == types.BILLING_MODEL_TIERED {
+			totalCost = totalCost.Add(s.calculateTieredCost(ctx, price, r.Value))
+		} else {
+			totalCost = totalCost.Add(s.calculateSingletonCost(ctx, price, r.Value))
+		}
+	}
+	return totalCost.Round(types.GetCurrencyPrecision(price.Currency))
 }
 
 // calculateTieredCost calculates cost for tiered pricing
@@ -1237,7 +1393,7 @@ func (s *priceService) syncPriceToChargebeeIfEnabled(ctx context.Context, priceI
 	// Get Chargebee integration
 	chargebeeIntegration, err := s.IntegrationFactory.GetChargebeeIntegration(ctx)
 	if err != nil {
-		s.Logger.Debugw("Chargebee integration not available, skipping sync",
+		s.Logger.DebugwCtx(ctx, "Chargebee integration not available, skipping sync",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", err)
@@ -1246,7 +1402,7 @@ func (s *priceService) syncPriceToChargebeeIfEnabled(ctx context.Context, priceI
 
 	// Check if Chargebee connection exists
 	if !chargebeeIntegration.Client.HasChargebeeConnection(ctx) {
-		s.Logger.Debugw("Chargebee connection not configured, skipping sync",
+		s.Logger.DebugwCtx(ctx, "Chargebee connection not configured, skipping sync",
 			"price_id", priceID,
 			"plan_id", planID)
 		return
@@ -1255,7 +1411,7 @@ func (s *priceService) syncPriceToChargebeeIfEnabled(ctx context.Context, priceI
 	// Get plan using repository
 	plan, err := s.PlanRepo.Get(ctx, planID)
 	if err != nil {
-		s.Logger.Errorw("failed to get plan for Chargebee sync",
+		s.Logger.ErrorwCtx(ctx, "failed to get plan for Chargebee sync",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", err)
@@ -1265,7 +1421,7 @@ func (s *priceService) syncPriceToChargebeeIfEnabled(ctx context.Context, priceI
 	// Get price using repository
 	priceModel, err := s.PriceRepo.Get(ctx, priceID)
 	if err != nil {
-		s.Logger.Errorw("failed to get price for Chargebee sync",
+		s.Logger.ErrorwCtx(ctx, "failed to get price for Chargebee sync",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", err)
@@ -1274,12 +1430,12 @@ func (s *priceService) syncPriceToChargebeeIfEnabled(ctx context.Context, priceI
 
 	// Sync to Chargebee (non-blocking - log errors but don't fail)
 	if syncErr := chargebeeIntegration.PlanSyncSvc.SyncPlanToChargebee(ctx, plan, []*price.Price{priceModel}); syncErr != nil {
-		s.Logger.Errorw("failed to sync price to Chargebee",
+		s.Logger.ErrorwCtx(ctx, "failed to sync price to Chargebee",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", syncErr)
 	} else {
-		s.Logger.Infow("successfully synced price to Chargebee",
+		s.Logger.InfowCtx(ctx, "successfully synced price to Chargebee",
 			"price_id", priceID,
 			"plan_id", planID)
 	}
@@ -1386,7 +1542,7 @@ func (s *priceService) applyPriceUnitConversionToPrice(ctx context.Context, p *p
 		p.DisplayPriceUnitAmount = p.GetDisplayPriceUnitAmount(priceUnit.Symbol)
 	}
 
-	s.Logger.Infow("applied price unit conversion to price object",
+	s.Logger.InfowCtx(ctx, "applied price unit conversion to price object",
 		"price_unit_id", priceUnit.ID,
 		"price_unit_code", priceUnit.Code,
 		"conversion_rate", priceUnit.ConversionRate.String(),
@@ -1405,7 +1561,7 @@ func (s *priceService) syncPriceToQuickBooksIfEnabled(ctx context.Context, price
 	// Get global Temporal service
 	temporalSvc := temporalService.GetGlobalTemporalService()
 	if temporalSvc == nil {
-		s.Logger.Debugw("Temporal service not available, skipping QuickBooks sync",
+		s.Logger.DebugwCtx(ctx, "Temporal service not available, skipping QuickBooks sync",
 			"price_id", priceID)
 		return
 	}
@@ -1420,12 +1576,12 @@ func (s *priceService) syncPriceToQuickBooksIfEnabled(ctx context.Context, price
 	if err != nil {
 		if ierr.IsNotFound(err) {
 			// Connection not configured - skip silently
-			s.Logger.Debugw("QB TEMPORAL SYNC - connection not found, skipping",
+			s.Logger.DebugwCtx(ctx, "QB TEMPORAL SYNC - connection not found, skipping",
 				"price_id", priceID)
 			return
 		}
 		// Actual error - log but don't fail
-		s.Logger.Errorw("error checking QuickBooks connection",
+		s.Logger.ErrorwCtx(ctx, "error checking QuickBooks connection",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", err)
@@ -1444,14 +1600,14 @@ func (s *priceService) syncPriceToQuickBooksIfEnabled(ctx context.Context, price
 		workflowInput,
 	)
 	if err != nil {
-		s.Logger.Errorw("failed to start QuickBooks sync workflow",
+		s.Logger.ErrorwCtx(ctx, "failed to start QuickBooks sync workflow",
 			"price_id", priceID,
 			"plan_id", planID,
 			"error", err)
 		return
 	}
 
-	s.Logger.Debugw("QuickBooks sync workflow started",
+	s.Logger.DebugwCtx(ctx, "QuickBooks sync workflow started",
 		"price_id", priceID,
 		"plan_id", planID,
 		"workflow_id", workflowRun.GetID(),

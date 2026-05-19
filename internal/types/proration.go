@@ -41,15 +41,6 @@ const (
 	BillingModeInArrears BillingMode = "in_arrears"
 )
 
-// ScheduleType determines when subscription changes take effect.
-type ScheduleType string
-
-const (
-	ScheduleTypeImmediate    ScheduleType = "immediate"
-	ScheduleTypePeriodEnd    ScheduleType = "period_end"
-	ScheduleTypeSpecificDate ScheduleType = "specific_date"
-)
-
 // TerminationReason represents why a subscription is being terminated.
 type TerminationReason string
 
@@ -64,19 +55,21 @@ const (
 type CancellationType string
 
 const (
-	CancellationTypeImmediate   CancellationType = "immediate"
-	CancellationTypeEndOfPeriod CancellationType = "end_of_period"
+	CancellationTypeImmediate     CancellationType = "immediate"
+	CancellationTypeEndOfPeriod   CancellationType = "end_of_period"
+	CancellationTypeScheduledDate CancellationType = "scheduled_date"
 )
 
 var CancellationTypeValues = []CancellationType{
 	CancellationTypeImmediate,
 	CancellationTypeEndOfPeriod,
+	CancellationTypeScheduledDate,
 }
 
 func (c CancellationType) Validate() error {
 	if !lo.Contains(CancellationTypeValues, c) {
 		return ierr.NewError("invalid cancellation type").
-			WithHint("Cancellation type must be immediate, end_of_period, or specific_date").
+			WithHint("Cancellation type must be immediate, end_of_period, or scheduled_date").
 			WithReportableDetails(map[string]any{
 				"allowed_values": CancellationTypeValues,
 				"provided_value": c,
@@ -88,6 +81,37 @@ func (c CancellationType) Validate() error {
 
 func (c CancellationType) String() string {
 	return string(c)
+}
+
+// CancelImmediatelyInvoicePolicy controls whether to generate a final invoice on immediate subscription cancellation.
+type CancelImmediatelyInvoicePolicy string
+
+const (
+	CancelImmediatelyInvoicePolicyGenerateInvoice CancelImmediatelyInvoicePolicy = "generate_invoice"
+	CancelImmediatelyInvoicePolicySkip            CancelImmediatelyInvoicePolicy = "skip"
+)
+
+func (p CancelImmediatelyInvoicePolicy) Validate() error {
+
+	allowedValues := []CancelImmediatelyInvoicePolicy{
+		CancelImmediatelyInvoicePolicyGenerateInvoice,
+		CancelImmediatelyInvoicePolicySkip,
+	}
+
+	if !lo.Contains(allowedValues, p) {
+		return ierr.NewError("invalid cancel immediately invoice policy").
+			WithHint("Cancel immediately invoice policy must be generate_invoice or skip").
+			WithReportableDetails(map[string]any{
+				"allowed_values": allowedValues,
+				"provided_value": p,
+			}).
+			Mark(ierr.ErrValidation)
+	}
+	return nil
+}
+
+func (p CancelImmediatelyInvoicePolicy) String() string {
+	return string(p)
 }
 
 // BillingCycleAnchor defines how billing cycle is handled during subscription changes
@@ -130,7 +154,7 @@ var ProrationBehaviorValues = []ProrationBehavior{
 func (p ProrationBehavior) Validate() error {
 	if !lo.Contains(ProrationBehaviorValues, p) {
 		return ierr.NewError("invalid proration behavior").
-			WithHint("Proration behavior must be create_prorations, always_invoice, or none").
+			WithHint("Proration behavior must be create_prorations or none").
 			WithReportableDetails(map[string]any{
 				"allowed_values": ProrationBehaviorValues,
 				"provided_value": p,

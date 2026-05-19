@@ -427,26 +427,12 @@ func (o PlanQueryOptions) ApplyPaginationFilter(query PlanQuery, limit int, offs
 	return query.Offset(offset).Limit(limit)
 }
 
+// GetFieldName returns the ent field name for plan; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o PlanQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return plan.FieldCreatedAt
-	case "updated_at":
-		return plan.FieldUpdatedAt
-	case "lookup_key":
-		return plan.FieldLookupKey
-	case "name":
-		return plan.FieldName
-	case "description":
-		return plan.FieldDescription
-	case "status":
-		return plan.FieldStatus
-	case "display_order":
-		return plan.FieldDisplayOrder
-	default:
-		// unknown field
-		return ""
+	if plan.ValidColumn(field) {
+		return field
 	}
+	return ""
 }
 
 func (o PlanQueryOptions) GetFieldResolver(field string) (string, error) {
@@ -470,6 +456,15 @@ func (o PlanQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.Pl
 
 	if f.LookupKey != nil {
 		query = query.Where(plan.LookupKeyEQ(*f.LookupKey))
+	}
+
+	query, err = dsl.ApplyMetadataFilter[PlanQuery, predicate.Plan](
+		query,
+		f.MetadataFilter,
+		func(p dsl.Predicate) predicate.Plan { return predicate.Plan(p) },
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	if f.Filters != nil {

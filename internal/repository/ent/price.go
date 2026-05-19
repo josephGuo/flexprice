@@ -2,16 +2,20 @@ package ent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/flexprice/flexprice/ent"
+	"github.com/flexprice/flexprice/ent/predicate"
 	"github.com/flexprice/flexprice/ent/price"
 	"github.com/flexprice/flexprice/internal/cache"
 	domainPrice "github.com/flexprice/flexprice/internal/domain/price"
+	"github.com/flexprice/flexprice/internal/dsl"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/postgres"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/lib/pq"
 	"github.com/samber/lo"
 )
 
@@ -59,7 +63,7 @@ func (r *priceRepository) Create(ctx context.Context, p *domainPrice.Price) erro
 		SetID(p.ID).
 		SetTenantID(p.TenantID).
 		SetAmount(p.Amount).
-		SetCurrency(p.Currency).
+		SetCurrency(strings.ToLower(p.Currency)).
 		SetDisplayAmount(p.DisplayAmount).
 		SetPriceUnitType(p.PriceUnitType).
 		SetType(p.Type).
@@ -72,7 +76,7 @@ func (r *priceRepository) Create(ctx context.Context, p *domainPrice.Price) erro
 		SetNillableEndDate(p.EndDate).
 		SetNillableMeterID(lo.ToPtr(p.MeterID)).
 		SetInvoiceCadence(p.InvoiceCadence).
-		SetTrialPeriod(p.TrialPeriod).
+		SetTrialPeriodDays(p.TrialPeriodDays).
 		SetNillableTierMode(lo.ToPtr(p.TierMode)).
 		SetTiers(p.ToEntTiers()).
 		SetPriceUnitTiers(domainPrice.ToEntTiersFromJSONB(p.PriceUnitTiers)).
@@ -95,6 +99,10 @@ func (r *priceRepository) Create(ctx context.Context, p *domainPrice.Price) erro
 		SetNillablePriceUnitAmount(p.PriceUnitAmount).
 		SetDisplayPriceUnitAmount(p.DisplayPriceUnitAmount).
 		SetNillableConversionRate(p.ConversionRate)
+
+	if p.GroupID != "" {
+		priceBuilder = priceBuilder.SetGroupID(p.GroupID)
+	}
 
 	price, err := priceBuilder.Save(ctx)
 
@@ -187,7 +195,13 @@ func (r *priceRepository) List(ctx context.Context, filter *types.PriceFilter) (
 	query := client.Price.Query()
 
 	// Apply entity-specific filters
-	query = r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
+	query, err := r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
+	if err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).
+			WithHint("Failed to apply price filters").
+			Mark(ierr.ErrValidation)
+	}
 
 	// Apply common query options
 	query = ApplyQueryOptions(ctx, query, filter, r.queryOpts)
@@ -216,8 +230,14 @@ func (r *priceRepository) Count(ctx context.Context, filter *types.PriceFilter) 
 
 	query := client.Price.Query()
 
+	query, err := r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
+	if err != nil {
+		SetSpanError(span, err)
+		return 0, ierr.WithError(err).
+			WithHint("Failed to apply price filters").
+			Mark(ierr.ErrValidation)
+	}
 	query = ApplyBaseFilters(ctx, query, filter, r.queryOpts)
-	query = r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
 
 	count, err := query.Count(ctx)
 	if err != nil {
@@ -248,22 +268,25 @@ func (r *priceRepository) ListAll(ctx context.Context, filter *types.PriceFilter
 	return r.List(ctx, filter)
 }
 
-func (r *priceRepository) Update(ctx context.Context, p *domainPrice.Price) error {
+func (r *priceRepository) Update(ctx context.Context, p *domainPrice.Price, bumpSequence bool) error {
 	client := r.client.Writer(ctx)
 
 	r.log.Debugw("updating price",
 		"price_id", p.ID,
 		"tenant_id", p.TenantID,
+		"bump_sequence", bumpSequence,
 	)
 
 	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "price", "update", map[string]interface{}{
-		"price_id":  p.ID,
-		"tenant_id": p.TenantID,
+		"price_id":      p.ID,
+		"tenant_id":     p.TenantID,
+		"bump_sequence": bumpSequence,
 	})
 	defer FinishSpan(span)
 
-	_, err := client.Price.Update().
+	// Build the update query
+	update := client.Price.Update().
 		Where(
 			price.ID(p.ID),
 			price.TenantID(p.TenantID),
@@ -275,9 +298,28 @@ func (r *priceRepository) Update(ctx context.Context, p *domainPrice.Price) erro
 		SetDescription(p.Description).
 		SetMetadata(map[string]string(p.Metadata)).
 		SetUpdatedAt(time.Now().UTC()).
-		SetUpdatedBy(types.GetUserID(ctx)).
-		SetNillableGroupID(lo.ToPtr(p.GroupID)).
-		Save(ctx)
+		SetUpdatedBy(types.GetUserID(ctx))
+
+	// Caller asserts a sync-relevant field is changing (i.e. end_date being
+	// set or cleared). Update prices.sequence for plan-price sync.
+	if bumpSequence {
+		nextSeq, err := r.nextPriceSequence(ctx)
+		if err != nil {
+			SetSpanError(span, err)
+			return err
+		}
+		update = update.SetSequence(nextSeq)
+		p.Sequence = nextSeq
+	}
+
+	// Handle group_id: empty string clears (NULL), non-empty sets the value
+	if p.GroupID == "" {
+		update = update.ClearGroupID()
+	} else {
+		update = update.SetNillableGroupID(lo.ToPtr(p.GroupID))
+	}
+
+	_, err := update.Save(ctx)
 
 	if err != nil {
 		SetSpanError(span, err)
@@ -299,6 +341,37 @@ func (r *priceRepository) Update(ctx context.Context, p *domainPrice.Price) erro
 	return nil
 }
 
+// nextPriceSequence fetches the next value from prices_sequence_seq, used to
+// stamp prices.sequence on state changes that subscriptions need to react to.
+// The sequence is defined in migrations/postgres/V4_prices_sequence.up.sql and
+// referenced as the DB-side DEFAULT on prices.sequence.
+func (r *priceRepository) nextPriceSequence(ctx context.Context) (int64, error) {
+	rows, err := r.client.Writer(ctx).QueryContext(ctx, "SELECT nextval('prices_sequence_seq')")
+	if err != nil {
+		return 0, ierr.WithError(err).
+			WithHint("Failed to advance price sequence").
+			Mark(ierr.ErrDatabase)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return 0, ierr.WithError(rowsErr).
+				WithHint("Failed to advance price sequence").
+				Mark(ierr.ErrDatabase)
+		}
+		return 0, ierr.NewError("no sequence value returned").Mark(ierr.ErrInternal)
+	}
+
+	var next int64
+	if scanErr := rows.Scan(&next); scanErr != nil {
+		return 0, ierr.WithError(scanErr).
+			WithHint("Failed to read price sequence value").
+			Mark(ierr.ErrDatabase)
+	}
+	return next, nil
+}
+
 func (r *priceRepository) Delete(ctx context.Context, id string) error {
 	client := r.client.Writer(ctx)
 
@@ -314,12 +387,21 @@ func (r *priceRepository) Delete(ctx context.Context, id string) error {
 	})
 	defer FinishSpan(span)
 
-	_, err := client.Price.Update().
+	// Archival is a state change subs need to react to (the price drops out
+	// of the published set the sync looks at). Bump the sequence so the next
+	// sync sees the change.
+	nextSeq, err := r.nextPriceSequence(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Price.Update().
 		Where(
 			price.ID(id),
 			price.TenantID(types.GetTenantID(ctx)),
 			price.EnvironmentID(types.GetEnvironmentID(ctx)),
 		).
+		SetSequence(nextSeq).
 		SetStatus(string(types.StatusArchived)).
 		SetUpdatedAt(time.Now().UTC()).
 		SetUpdatedBy(types.GetUserID(ctx)).
@@ -368,10 +450,11 @@ func (r *priceRepository) CreateBulk(ctx context.Context, prices []*domainPrice.
 			SetID(p.ID).
 			SetTenantID(p.TenantID).
 			SetAmount(p.Amount).
-			SetCurrency(p.Currency).
+			SetCurrency(strings.ToLower(p.Currency)).
 			SetDisplayAmount(p.DisplayAmount).
 			SetEntityID(p.EntityID).
 			SetEntityType(p.EntityType).
+			SetNillableParentPriceID(lo.ToPtr(p.ParentPriceID)).
 			SetType(p.Type).
 			SetBillingPeriod(p.BillingPeriod).
 			SetBillingPeriodCount(p.BillingPeriodCount).
@@ -381,7 +464,7 @@ func (r *priceRepository) CreateBulk(ctx context.Context, prices []*domainPrice.
 			SetInvoiceCadence(p.InvoiceCadence).
 			SetNillableStartDate(p.StartDate).
 			SetNillableEndDate(p.EndDate).
-			SetTrialPeriod(p.TrialPeriod).
+			SetTrialPeriodDays(p.TrialPeriodDays).
 			SetNillableMeterID(lo.ToPtr(p.MeterID)).
 			SetNillableTierMode(lo.ToPtr(p.TierMode)).
 			SetTiers(p.ToEntTiers()).
@@ -421,8 +504,6 @@ func (r *priceRepository) CreateBulk(ctx context.Context, prices []*domainPrice.
 }
 
 func (r *priceRepository) DeleteBulk(ctx context.Context, ids []string) error {
-	client := r.client.Writer(ctx)
-
 	r.log.Debugw("bulk deleting prices",
 		"count", len(ids),
 		"tenant_id", types.GetTenantID(ctx),
@@ -439,18 +520,29 @@ func (r *priceRepository) DeleteBulk(ctx context.Context, ids []string) error {
 		return nil
 	}
 
-	_, err := client.Price.Update().
-		Where(
-			price.IDIn(ids...),
-			price.TenantID(types.GetTenantID(ctx)),
-			price.EnvironmentID(types.GetEnvironmentID(ctx)),
-		).
-		SetStatus(string(types.StatusArchived)).
-		SetUpdatedAt(time.Now().UTC()).
-		SetUpdatedBy(types.GetUserID(ctx)).
-		Save(ctx)
-
+	// Bump prices.sequence per row by inlining nextval() in the UPDATE so each
+	// archived price gets a distinct sequence value. Done via raw SQL because
+	// Ent's typed Update doesn't expose SQL function expressions.
+	query := `
+		UPDATE prices
+		SET sequence   = nextval('prices_sequence_seq'),
+		    status     = $1,
+		    updated_at = NOW(),
+		    updated_by = $2
+		WHERE id = ANY($3)
+		  AND tenant_id      = $4
+		  AND environment_id = $5
+	`
+	_, err := r.client.Writer(ctx).ExecContext(
+		ctx, query,
+		string(types.StatusArchived),
+		types.GetUserID(ctx),
+		pq.Array(ids),
+		types.GetTenantID(ctx),
+		types.GetEnvironmentID(ctx),
+	)
 	if err != nil {
+		SetSpanError(span, err)
 		return ierr.WithError(err).
 			WithHint("Failed to delete prices in bulk").
 			Mark(ierr.ErrDatabase)
@@ -500,25 +592,23 @@ func (o PriceQueryOptions) ApplyPaginationFilter(query PriceQuery, limit int, of
 	return query
 }
 
+// GetFieldName returns the ent field name for price; resolves optional aliases then delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o PriceQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return price.FieldCreatedAt
-	case "updated_at":
-		return price.FieldUpdatedAt
-	case "lookup_key":
-		return price.FieldLookupKey
-	case "amount":
-		return price.FieldAmount
-	default:
+	if field == "value" {
+		field = "amount"
+	}
+	if price.ValidColumn(field) {
 		return field
 	}
+	return ""
 }
 
-func (o PriceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.PriceFilter, query PriceQuery) PriceQuery {
+func (o PriceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.PriceFilter, query PriceQuery) (PriceQuery, error) {
 	if f == nil {
-		return query
+		return query, nil
 	}
+
+	var err error
 
 	// Apply price IDs filter if specified
 	if len(f.PriceIDs) > 0 {
@@ -569,7 +659,28 @@ func (o PriceQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.P
 		query = query.Where(price.StartDateLT(*f.StartDateLT))
 	}
 
-	return query
+	if f.Filters != nil {
+		query, err = dsl.ApplyFilters[PriceQuery, predicate.Price](
+			query,
+			f.Filters,
+			o.GetFieldResolver,
+			func(p dsl.Predicate) predicate.Price { return predicate.Price(p) },
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return query, nil
+}
+
+func (o PriceQueryOptions) GetFieldResolver(field string) (string, error) {
+	fieldName := o.GetFieldName(field)
+	if fieldName == "" {
+		return "", ierr.NewErrorf("unknown field name '%s' in price query", field).
+			Mark(ierr.ErrValidation)
+	}
+	return fieldName, nil
 }
 
 func (r *priceRepository) GetByPlanID(ctx context.Context, planID string) ([]*domainPrice.Price, error) {
@@ -679,6 +790,7 @@ func (r *priceRepository) GetByLookupKey(ctx context.Context, lookupKey string) 
 		Where(price.TenantID(types.GetTenantID(ctx)),
 			price.EnvironmentID(types.GetEnvironmentID(ctx)),
 			price.Status(string(types.StatusPublished)),
+			price.EndDateIsNil(),
 		).
 		Only(ctx)
 	if err != nil {

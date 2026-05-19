@@ -125,14 +125,12 @@ func (InvoiceLineItem) Fields() []ent.Field {
 			SchemaType(map[string]string{
 				"postgres": "numeric(20,8)",
 			}).
-			Default(decimal.Zero).
-			Immutable(),
+			Default(decimal.Zero),
 		field.Other("quantity", decimal.Decimal{}).
 			SchemaType(map[string]string{
 				"postgres": "numeric(20,8)",
 			}).
-			Default(decimal.Zero).
-			Immutable(),
+			Default(decimal.Zero),
 		field.String("currency").
 			SchemaType(map[string]string{
 				"postgres": "varchar(10)",
@@ -155,6 +153,52 @@ func (InvoiceLineItem) Fields() []ent.Field {
 			SchemaType(map[string]string{
 				"postgres": "jsonb",
 			}),
+		field.Other("prepaid_credits_applied", decimal.Decimal{}).
+			SchemaType(map[string]string{
+				"postgres": "numeric(20,8)",
+			}).
+			// TODO: remove optional and nillable after migration
+			Optional().
+			Nillable().
+			Default(decimal.Zero).
+			Comment("Amount in invoice currency reduced from line item due to prepaid credits application"),
+
+		field.Other("line_item_discount", decimal.Decimal{}).
+			SchemaType(map[string]string{
+				"postgres": "numeric(20,8)",
+			}).
+			// TODO: remove optional and nillable after migration
+			Optional().
+			Nillable().
+			Default(decimal.Zero).
+			Comment("Discount amount in invoice currency applied to this line item"),
+
+		field.Other("invoice_level_discount", decimal.Decimal{}).
+			SchemaType(map[string]string{
+				"postgres": "numeric(20,8)",
+			}).
+			// TODO: remove optional and nillable after migration
+			Optional().
+			Nillable().
+			Default(decimal.Zero).
+			Comment("Discount amount in invoice currency applied to all line items on the invoice"),
+
+		field.String("subscription_line_item_id").
+			SchemaType(map[string]string{
+				"postgres": "varchar(50)",
+			}).
+			Optional().
+			Nillable().
+			Immutable().
+			Comment("ID of the subscription_line_item that generated this invoice line item"),
+
+		field.Other("adjusted_entitlement_quantity", decimal.Decimal{}).
+			SchemaType(map[string]string{
+				"postgres": "numeric(20,8)",
+			}).
+			Optional().
+			Nillable().
+			Comment("Entitlement-covered units deducted from raw usage. Nil when no entitlement applied"),
 	}
 }
 

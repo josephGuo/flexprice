@@ -15,6 +15,7 @@ import (
 	"github.com/flexprice/flexprice/ent/invoicelineitem"
 	"github.com/flexprice/flexprice/ent/predicate"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/shopspring/decimal"
 )
 
 // InvoiceLineItemUpdate is the builder for updating InvoiceLineItem entities.
@@ -68,6 +69,34 @@ func (_u *InvoiceLineItemUpdate) SetNillableUpdatedBy(v *string) *InvoiceLineIte
 func (_u *InvoiceLineItemUpdate) ClearUpdatedBy() *InvoiceLineItemUpdate {
 	_u.mutation.ClearUpdatedBy()
 	return _u
+}
+
+// SetAmount sets the "amount" field.
+func (iliu *InvoiceLineItemUpdate) SetAmount(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetAmount(d)
+	return iliu
+}
+
+// SetNillableAmount sets the "amount" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillableAmount(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetAmount(*d)
+	}
+	return iliu
+}
+
+// SetQuantity sets the "quantity" field.
+func (iliu *InvoiceLineItemUpdate) SetQuantity(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetQuantity(d)
+	return iliu
+}
+
+// SetNillableQuantity sets the "quantity" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillableQuantity(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetQuantity(*d)
+	}
+	return iliu
 }
 
 // SetPeriodStart sets the "period_start" field.
@@ -132,6 +161,86 @@ func (_u *InvoiceLineItemUpdate) SetCommitmentInfo(v *types.CommitmentInfo) *Inv
 func (_u *InvoiceLineItemUpdate) ClearCommitmentInfo() *InvoiceLineItemUpdate {
 	_u.mutation.ClearCommitmentInfo()
 	return _u
+}
+
+// SetPrepaidCreditsApplied sets the "prepaid_credits_applied" field.
+func (iliu *InvoiceLineItemUpdate) SetPrepaidCreditsApplied(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetPrepaidCreditsApplied(d)
+	return iliu
+}
+
+// SetNillablePrepaidCreditsApplied sets the "prepaid_credits_applied" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillablePrepaidCreditsApplied(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetPrepaidCreditsApplied(*d)
+	}
+	return iliu
+}
+
+// ClearPrepaidCreditsApplied clears the value of the "prepaid_credits_applied" field.
+func (iliu *InvoiceLineItemUpdate) ClearPrepaidCreditsApplied() *InvoiceLineItemUpdate {
+	iliu.mutation.ClearPrepaidCreditsApplied()
+	return iliu
+}
+
+// SetLineItemDiscount sets the "line_item_discount" field.
+func (iliu *InvoiceLineItemUpdate) SetLineItemDiscount(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetLineItemDiscount(d)
+	return iliu
+}
+
+// SetNillableLineItemDiscount sets the "line_item_discount" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillableLineItemDiscount(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetLineItemDiscount(*d)
+	}
+	return iliu
+}
+
+// ClearLineItemDiscount clears the value of the "line_item_discount" field.
+func (iliu *InvoiceLineItemUpdate) ClearLineItemDiscount() *InvoiceLineItemUpdate {
+	iliu.mutation.ClearLineItemDiscount()
+	return iliu
+}
+
+// SetInvoiceLevelDiscount sets the "invoice_level_discount" field.
+func (iliu *InvoiceLineItemUpdate) SetInvoiceLevelDiscount(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetInvoiceLevelDiscount(d)
+	return iliu
+}
+
+// SetNillableInvoiceLevelDiscount sets the "invoice_level_discount" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillableInvoiceLevelDiscount(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetInvoiceLevelDiscount(*d)
+	}
+	return iliu
+}
+
+// ClearInvoiceLevelDiscount clears the value of the "invoice_level_discount" field.
+func (iliu *InvoiceLineItemUpdate) ClearInvoiceLevelDiscount() *InvoiceLineItemUpdate {
+	iliu.mutation.ClearInvoiceLevelDiscount()
+	return iliu
+}
+
+// SetAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field.
+func (iliu *InvoiceLineItemUpdate) SetAdjustedEntitlementQuantity(d decimal.Decimal) *InvoiceLineItemUpdate {
+	iliu.mutation.SetAdjustedEntitlementQuantity(d)
+	return iliu
+}
+
+// SetNillableAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field if the given value is not nil.
+func (iliu *InvoiceLineItemUpdate) SetNillableAdjustedEntitlementQuantity(d *decimal.Decimal) *InvoiceLineItemUpdate {
+	if d != nil {
+		iliu.SetAdjustedEntitlementQuantity(*d)
+	}
+	return iliu
+}
+
+// ClearAdjustedEntitlementQuantity clears the value of the "adjusted_entitlement_quantity" field.
+func (iliu *InvoiceLineItemUpdate) ClearAdjustedEntitlementQuantity() *InvoiceLineItemUpdate {
+	iliu.mutation.ClearAdjustedEntitlementQuantity()
+	return iliu
 }
 
 // AddCouponApplicationIDs adds the "coupon_applications" edge to the CouponApplication entity by IDs.
@@ -285,6 +394,12 @@ func (_u *InvoiceLineItemUpdate) sqlSave(ctx context.Context) (_node int, err er
 	if _u.mutation.DisplayNameCleared() {
 		_spec.ClearField(invoicelineitem.FieldDisplayName, field.TypeString)
 	}
+	if value, ok := _u.mutation.Amount(); ok {
+		_spec.SetField(invoicelineitem.FieldAmount, field.TypeOther, value)
+	}
+	if value, ok := _u.mutation.Quantity(); ok {
+		_spec.SetField(invoicelineitem.FieldQuantity, field.TypeOther, value)
+	}
 	if value, ok := _u.mutation.PeriodStart(); ok {
 		_spec.SetField(invoicelineitem.FieldPeriodStart, field.TypeTime, value)
 	}
@@ -308,6 +423,33 @@ func (_u *InvoiceLineItemUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if _u.mutation.CommitmentInfoCleared() {
 		_spec.ClearField(invoicelineitem.FieldCommitmentInfo, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.PrepaidCreditsApplied(); ok {
+		_spec.SetField(invoicelineitem.FieldPrepaidCreditsApplied, field.TypeOther, value)
+	}
+	if _u.mutation.PrepaidCreditsAppliedCleared() {
+		_spec.ClearField(invoicelineitem.FieldPrepaidCreditsApplied, field.TypeOther)
+	}
+	if value, ok := _u.mutation.LineItemDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldLineItemDiscount, field.TypeOther, value)
+	}
+	if _u.mutation.LineItemDiscountCleared() {
+		_spec.ClearField(invoicelineitem.FieldLineItemDiscount, field.TypeOther)
+	}
+	if value, ok := _u.mutation.InvoiceLevelDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldInvoiceLevelDiscount, field.TypeOther, value)
+	}
+	if _u.mutation.InvoiceLevelDiscountCleared() {
+		_spec.ClearField(invoicelineitem.FieldInvoiceLevelDiscount, field.TypeOther)
+	}
+	if _u.mutation.SubscriptionLineItemIDCleared() {
+		_spec.ClearField(invoicelineitem.FieldSubscriptionLineItemID, field.TypeString)
+	}
+	if value, ok := _u.mutation.AdjustedEntitlementQuantity(); ok {
+		_spec.SetField(invoicelineitem.FieldAdjustedEntitlementQuantity, field.TypeOther, value)
+	}
+	if _u.mutation.AdjustedEntitlementQuantityCleared() {
+		_spec.ClearField(invoicelineitem.FieldAdjustedEntitlementQuantity, field.TypeOther)
 	}
 	if _u.mutation.CouponApplicationsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -414,6 +556,34 @@ func (_u *InvoiceLineItemUpdateOne) ClearUpdatedBy() *InvoiceLineItemUpdateOne {
 	return _u
 }
 
+// SetAmount sets the "amount" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetAmount(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetAmount(d)
+	return iliuo
+}
+
+// SetNillableAmount sets the "amount" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillableAmount(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetAmount(*d)
+	}
+	return iliuo
+}
+
+// SetQuantity sets the "quantity" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetQuantity(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetQuantity(d)
+	return iliuo
+}
+
+// SetNillableQuantity sets the "quantity" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillableQuantity(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetQuantity(*d)
+	}
+	return iliuo
+}
+
 // SetPeriodStart sets the "period_start" field.
 func (_u *InvoiceLineItemUpdateOne) SetPeriodStart(v time.Time) *InvoiceLineItemUpdateOne {
 	_u.mutation.SetPeriodStart(v)
@@ -476,6 +646,86 @@ func (_u *InvoiceLineItemUpdateOne) SetCommitmentInfo(v *types.CommitmentInfo) *
 func (_u *InvoiceLineItemUpdateOne) ClearCommitmentInfo() *InvoiceLineItemUpdateOne {
 	_u.mutation.ClearCommitmentInfo()
 	return _u
+}
+
+// SetPrepaidCreditsApplied sets the "prepaid_credits_applied" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetPrepaidCreditsApplied(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetPrepaidCreditsApplied(d)
+	return iliuo
+}
+
+// SetNillablePrepaidCreditsApplied sets the "prepaid_credits_applied" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillablePrepaidCreditsApplied(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetPrepaidCreditsApplied(*d)
+	}
+	return iliuo
+}
+
+// ClearPrepaidCreditsApplied clears the value of the "prepaid_credits_applied" field.
+func (iliuo *InvoiceLineItemUpdateOne) ClearPrepaidCreditsApplied() *InvoiceLineItemUpdateOne {
+	iliuo.mutation.ClearPrepaidCreditsApplied()
+	return iliuo
+}
+
+// SetLineItemDiscount sets the "line_item_discount" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetLineItemDiscount(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetLineItemDiscount(d)
+	return iliuo
+}
+
+// SetNillableLineItemDiscount sets the "line_item_discount" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillableLineItemDiscount(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetLineItemDiscount(*d)
+	}
+	return iliuo
+}
+
+// ClearLineItemDiscount clears the value of the "line_item_discount" field.
+func (iliuo *InvoiceLineItemUpdateOne) ClearLineItemDiscount() *InvoiceLineItemUpdateOne {
+	iliuo.mutation.ClearLineItemDiscount()
+	return iliuo
+}
+
+// SetInvoiceLevelDiscount sets the "invoice_level_discount" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetInvoiceLevelDiscount(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetInvoiceLevelDiscount(d)
+	return iliuo
+}
+
+// SetNillableInvoiceLevelDiscount sets the "invoice_level_discount" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillableInvoiceLevelDiscount(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetInvoiceLevelDiscount(*d)
+	}
+	return iliuo
+}
+
+// ClearInvoiceLevelDiscount clears the value of the "invoice_level_discount" field.
+func (iliuo *InvoiceLineItemUpdateOne) ClearInvoiceLevelDiscount() *InvoiceLineItemUpdateOne {
+	iliuo.mutation.ClearInvoiceLevelDiscount()
+	return iliuo
+}
+
+// SetAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field.
+func (iliuo *InvoiceLineItemUpdateOne) SetAdjustedEntitlementQuantity(d decimal.Decimal) *InvoiceLineItemUpdateOne {
+	iliuo.mutation.SetAdjustedEntitlementQuantity(d)
+	return iliuo
+}
+
+// SetNillableAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field if the given value is not nil.
+func (iliuo *InvoiceLineItemUpdateOne) SetNillableAdjustedEntitlementQuantity(d *decimal.Decimal) *InvoiceLineItemUpdateOne {
+	if d != nil {
+		iliuo.SetAdjustedEntitlementQuantity(*d)
+	}
+	return iliuo
+}
+
+// ClearAdjustedEntitlementQuantity clears the value of the "adjusted_entitlement_quantity" field.
+func (iliuo *InvoiceLineItemUpdateOne) ClearAdjustedEntitlementQuantity() *InvoiceLineItemUpdateOne {
+	iliuo.mutation.ClearAdjustedEntitlementQuantity()
+	return iliuo
 }
 
 // AddCouponApplicationIDs adds the "coupon_applications" edge to the CouponApplication entity by IDs.
@@ -659,6 +909,12 @@ func (_u *InvoiceLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Invoice
 	if _u.mutation.DisplayNameCleared() {
 		_spec.ClearField(invoicelineitem.FieldDisplayName, field.TypeString)
 	}
+	if value, ok := _u.mutation.Amount(); ok {
+		_spec.SetField(invoicelineitem.FieldAmount, field.TypeOther, value)
+	}
+	if value, ok := _u.mutation.Quantity(); ok {
+		_spec.SetField(invoicelineitem.FieldQuantity, field.TypeOther, value)
+	}
 	if value, ok := _u.mutation.PeriodStart(); ok {
 		_spec.SetField(invoicelineitem.FieldPeriodStart, field.TypeTime, value)
 	}
@@ -682,6 +938,33 @@ func (_u *InvoiceLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Invoice
 	}
 	if _u.mutation.CommitmentInfoCleared() {
 		_spec.ClearField(invoicelineitem.FieldCommitmentInfo, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.PrepaidCreditsApplied(); ok {
+		_spec.SetField(invoicelineitem.FieldPrepaidCreditsApplied, field.TypeOther, value)
+	}
+	if _u.mutation.PrepaidCreditsAppliedCleared() {
+		_spec.ClearField(invoicelineitem.FieldPrepaidCreditsApplied, field.TypeOther)
+	}
+	if value, ok := _u.mutation.LineItemDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldLineItemDiscount, field.TypeOther, value)
+	}
+	if _u.mutation.LineItemDiscountCleared() {
+		_spec.ClearField(invoicelineitem.FieldLineItemDiscount, field.TypeOther)
+	}
+	if value, ok := _u.mutation.InvoiceLevelDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldInvoiceLevelDiscount, field.TypeOther, value)
+	}
+	if _u.mutation.InvoiceLevelDiscountCleared() {
+		_spec.ClearField(invoicelineitem.FieldInvoiceLevelDiscount, field.TypeOther)
+	}
+	if _u.mutation.SubscriptionLineItemIDCleared() {
+		_spec.ClearField(invoicelineitem.FieldSubscriptionLineItemID, field.TypeString)
+	}
+	if value, ok := _u.mutation.AdjustedEntitlementQuantity(); ok {
+		_spec.SetField(invoicelineitem.FieldAdjustedEntitlementQuantity, field.TypeOther, value)
+	}
+	if _u.mutation.AdjustedEntitlementQuantityCleared() {
+		_spec.ClearField(invoicelineitem.FieldAdjustedEntitlementQuantity, field.TypeOther)
 	}
 	if _u.mutation.CouponApplicationsCleared() {
 		edge := &sqlgraph.EdgeSpec{

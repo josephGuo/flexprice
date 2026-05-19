@@ -127,6 +127,13 @@ func (Subscription) Fields() []ent.Field {
 			SchemaType(map[string]string{
 				"postgres": "decimal(20,6)",
 			}),
+		field.String("commitment_duration").
+			SchemaType(map[string]string{
+				"postgres": "varchar(50)",
+			}).
+			Optional().
+			Nillable().
+			GoType(types.BillingPeriod("")),
 		field.Other("overage_factor", decimal.Decimal{}).
 			Optional().
 			Nillable().
@@ -172,6 +179,43 @@ func (Subscription) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Customer ID to use for invoicing (can differ from the subscription customer)"),
+		field.String("parent_subscription_id").
+			SchemaType(map[string]string{
+				"postgres": "varchar(50)",
+			}).
+			Optional().
+			Nillable().
+			Comment("Parent subscription ID for hierarchy (e.g. child subscription under a parent)"),
+		// Payment terms (e.g. 15 NET, 30 NET) used to compute invoice due date from period end
+		field.String("payment_terms").
+			SchemaType(map[string]string{
+				"postgres": "varchar(20)",
+			}).
+			Optional().
+			Nillable().
+			GoType(types.PaymentTerms("")).
+			Comment("Payment terms for invoice due date (e.g. 15 NET, 30 NET, 45 NET, 60 NET, 75 NET, 90 NET)"),
+		field.String("subscription_type").
+			SchemaType(map[string]string{
+				"postgres": "varchar(20)",
+			}).
+			Default(string(types.SubscriptionTypeStandalone)).
+			GoType(types.SubscriptionType("")).
+			Comment("Subscription type within a customer hierarchy (standalone, parent, inherited)"),
+		field.Other("auto_invoice_threshold", decimal.Decimal{}).
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{
+				"postgres": "decimal(20,6)",
+			}).
+			Comment("Threshold usage amount (in subscription currency) that triggers an intermediate invoice. Overrides plan-level threshold when set."),
+
+		// Plan-price sequence up to which this subscription's line items
+		// have been reconciled with its plan's prices. Bumped by the
+		// plan-price sync after a successful reconciliation pass.
+		field.Int64("synced_price_sequence").
+			Default(0).
+			Annotations(entsql.Default("0")),
 	}
 }
 
@@ -181,6 +225,8 @@ func (Subscription) Edges() []ent.Edge {
 		edge.To("line_items", SubscriptionLineItem.Type),
 		edge.To("pauses", SubscriptionPause.Type),
 		edge.To("phases", SubscriptionPhase.Type),
+		edge.To("schedules", SubscriptionSchedule.Type).
+			Comment("Subscription can have multiple schedules for plan changes, addons, etc."),
 		edge.To("credit_grants", CreditGrant.Type),
 		edge.To("coupon_associations", CouponAssociation.Type).
 			Comment("Subscription can have multiple coupon associations"),
@@ -203,5 +249,9 @@ func (Subscription) Indexes() []ent.Index {
 		index.Fields("tenant_id", "environment_id", "subscription_status", "status"),
 		// For billing period updates
 		index.Fields("tenant_id", "environment_id", "current_period_end", "subscription_status", "status"),
+		// Drives the plan-price sync's "which subs are behind?" lookup.
+		index.Fields("tenant_id", "environment_id", "plan_id", "synced_price_sequence").
+			Annotations(entsql.IndexWhere(
+				"status = 'published' AND subscription_type IN ('standalone','delegated_invoicing','parent','grouped_invoicing')")),
 	}
 }

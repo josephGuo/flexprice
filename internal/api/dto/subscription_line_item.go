@@ -8,20 +8,93 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/flexprice/flexprice/internal/validator"
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
-// CreateSubscriptionLineItemRequest represents the request to create a subscription line item
+type SubscriptionPriceCreateRequest struct {
+	Type               types.PriceType          `json:"type" validate:"required"`
+	PriceUnitType      types.PriceUnitType      `json:"price_unit_type" validate:"required"`
+	BillingPeriod      types.BillingPeriod      `json:"billing_period" validate:"required"`
+	BillingPeriodCount int                      `json:"billing_period_count"`
+	BillingModel       types.BillingModel       `json:"billing_model" validate:"required"`
+	InvoiceCadence     types.InvoiceCadence     `json:"invoice_cadence" validate:"required"`
+	Amount             *decimal.Decimal         `json:"amount,omitempty" swaggertype:"string"`
+	MeterID            string                   `json:"meter_id,omitempty"`
+	FilterValues       map[string][]string      `json:"filter_values,omitempty"`
+	LookupKey          string                   `json:"lookup_key,omitempty"`
+	TrialPeriodDays    int                      `json:"trial_period_days"`
+	Description        string                   `json:"description,omitempty"`
+	Metadata           map[string]string        `json:"metadata,omitempty"`
+	TierMode           types.BillingTier        `json:"tier_mode,omitempty"`
+	Tiers              []CreatePriceTier        `json:"tiers,omitempty"`
+	TransformQuantity  *price.TransformQuantity `json:"transform_quantity,omitempty"`
+	PriceUnitConfig    *PriceUnitConfig         `json:"price_unit_config,omitempty"`
+	StartDate          *time.Time               `json:"start_date,omitempty"`
+	EndDate            *time.Time               `json:"end_date,omitempty"`
+	DisplayName        string                   `json:"display_name,omitempty"`
+	MinQuantity        *int64                   `json:"min_quantity,omitempty"`
+}
+
+// ToCreatePriceRequest builds a CreatePriceRequest for subscription-scoped price creation.
+// Currency, EntityType, and EntityID are set from the subscription; if StartDate is not set on the request, it defaults to the subscription's start date.
+func (p *SubscriptionPriceCreateRequest) ToCreatePriceRequest(sub *subscription.Subscription) CreatePriceRequest {
+	startDate := p.StartDate
+	if startDate == nil {
+		subStart := sub.StartDate.UTC()
+		startDate = &subStart
+	}
+	req := CreatePriceRequest{
+		Type:                 p.Type,
+		PriceUnitType:        p.PriceUnitType,
+		BillingPeriod:        p.BillingPeriod,
+		BillingPeriodCount:   p.BillingPeriodCount,
+		BillingModel:         p.BillingModel,
+		InvoiceCadence:       p.InvoiceCadence,
+		Amount:               p.Amount,
+		MeterID:              p.MeterID,
+		FilterValues:         p.FilterValues,
+		LookupKey:            p.LookupKey,
+		TrialPeriodDays:      p.TrialPeriodDays,
+		Description:          p.Description,
+		Metadata:             p.Metadata,
+		TierMode:             p.TierMode,
+		Tiers:                p.Tiers,
+		TransformQuantity:    p.TransformQuantity,
+		PriceUnitConfig:      p.PriceUnitConfig,
+		StartDate:            startDate,
+		EndDate:              p.EndDate,
+		DisplayName:          p.DisplayName,
+		MinQuantity:          p.MinQuantity,
+		Currency:             sub.Currency,
+		EntityType:           types.PRICE_ENTITY_TYPE_SUBSCRIPTION,
+		EntityID:             sub.ID,
+		SkipEntityValidation: true,
+	}
+	if req.BillingPeriodCount < 1 {
+		req.BillingPeriodCount = 1
+	}
+	return req
+}
+
+// CreateSubscriptionLineItemRequest represents the request to create a subscription line item.
+// For prices with billing_period ONETIME, request end_date is ignored: the line item end_date is always start_date + 1 calendar day (UTC), clamped to the subscription end when present.
 type CreateSubscriptionLineItemRequest struct {
-	PriceID              string            `json:"price_id" validate:"required"`
-	Quantity             decimal.Decimal   `json:"quantity,omitempty"`
-	StartDate            *time.Time        `json:"start_date,omitempty"`
-	EndDate              *time.Time        `json:"end_date,omitempty"`
-	Metadata             map[string]string `json:"metadata,omitempty"`
-	DisplayName          string            `json:"display_name,omitempty"`
-	SubscriptionPhaseID  *string           `json:"subscription_phase_id,omitempty"`
-	SkipEntitlementCheck bool              `json:"-"` // This is used to skip entitlement check when creating a subscription line item
+	// PriceID references an existing price (plan, addon, or subscription-scoped). Exactly one of price_id or price must be set.
+	PriceID string `json:"price_id,omitempty"`
+	// Price defines a new price inline; server creates a subscription-scoped price and adds the line item. Exactly one of price_id or price must be set. Entity/currency are set from the subscription.
+	Price                *SubscriptionPriceCreateRequest `json:"price,omitempty"`
+	Quantity             decimal.Decimal                 `json:"quantity,omitempty"`
+	StartDate            *time.Time                      `json:"start_date,omitempty"`
+	EndDate              *time.Time                      `json:"end_date,omitempty"`
+	Metadata             map[string]string               `json:"metadata,omitempty"`
+	DisplayName          string                          `json:"display_name,omitempty"`
+	SubscriptionPhaseID  *string                         `json:"subscription_phase_id,omitempty"`
+	SkipEntitlementCheck bool                            `json:"-"` // This is used to skip entitlement check when creating a subscription line item
+
+	// ProrationBehavior controls mid-period charge creation. Defaults to none.
+	ProrationBehavior types.ProrationBehavior `json:"proration_behavior,omitempty"`
 
 	// Commitment fields
 	CommitmentAmount        *decimal.Decimal     `json:"commitment_amount,omitempty"`
@@ -30,11 +103,15 @@ type CreateSubscriptionLineItemRequest struct {
 	CommitmentOverageFactor *decimal.Decimal     `json:"commitment_overage_factor,omitempty"`
 	CommitmentTrueUpEnabled bool                 `json:"commitment_true_up_enabled,omitempty"`
 	CommitmentWindowed      bool                 `json:"commitment_windowed,omitempty"`
+	CommitmentDuration      *types.BillingPeriod `json:"commitment_duration,omitempty"`
 }
 
 // DeleteSubscriptionLineItemRequest represents the request to delete a subscription line item
 type DeleteSubscriptionLineItemRequest struct {
 	EffectiveFrom *time.Time `json:"effective_from,omitempty"`
+
+	// ProrationBehavior controls mid-period credit issuance. Defaults to none.
+	ProrationBehavior types.ProrationBehavior `json:"proration_behavior,omitempty"`
 }
 
 type UpdateSubscriptionLineItemRequest struct {
@@ -65,6 +142,7 @@ type UpdateSubscriptionLineItemRequest struct {
 	CommitmentOverageFactor *decimal.Decimal     `json:"commitment_overage_factor,omitempty"`
 	CommitmentTrueUpEnabled *bool                `json:"commitment_true_up_enabled,omitempty"`
 	CommitmentWindowed      *bool                `json:"commitment_windowed,omitempty"`
+	CommitmentDuration      *types.BillingPeriod `json:"commitment_duration,omitempty"`
 }
 
 // LineItemParams contains all necessary parameters for creating a line item
@@ -90,20 +168,100 @@ func (r *UpdateSubscriptionLineItemRequest) HasCommitment() bool {
 	return hasAmountCommitment || hasQuantityCommitment
 }
 
-// Validate validates the create subscription line item request
-// price is optional and can be provided for MinQuantity validation
-func (r *CreateSubscriptionLineItemRequest) Validate(price *price.Price) error {
-	if r.PriceID == "" {
-		return ierr.NewError("price_id is required").
-			WithHint("Price ID is required").
+// Validate validates the create subscription line item request.
+// price is optional and can be provided for MinQuantity validation when using price_id.
+// sub is optional; when provided, line item and inline price start/end dates are validated to fall within subscription bounds.
+func (r *CreateSubscriptionLineItemRequest) Validate(price *price.Price, sub *subscription.Subscription) error {
+	// Exactly one of price_id or price must be set
+	hasPriceID := r.PriceID != ""
+	hasPrice := r.Price != nil
+	if hasPriceID && hasPrice {
+		return ierr.NewError("cannot provide both price_id and price").
+			WithHint("Provide either price_id (existing price) or price (inline price), not both.").
+			Mark(ierr.ErrValidation)
+	}
+	if !hasPriceID && !hasPrice {
+		return ierr.NewError("either price_id or price is required").
+			WithHint("Provide either price_id (existing price) or price (inline price).").
 			Mark(ierr.ErrValidation)
 	}
 
+	onetimeIgnoresRequestEndDate := (price != nil && price.BillingPeriod == types.BILLING_PERIOD_ONETIME) ||
+		(r.Price != nil && r.Price.BillingPeriod == types.BILLING_PERIOD_ONETIME)
+
 	// Validate start date is not after end date if both are provided
-	if r.StartDate != nil && r.EndDate != nil {
-		if r.StartDate.After(*r.EndDate) {
+	if !onetimeIgnoresRequestEndDate && r.StartDate != nil && r.EndDate != nil {
+		if r.StartDate.After(lo.FromPtr(r.EndDate)) {
 			return ierr.NewError("start_date cannot be after end_date").
 				WithHint("Start date cannot be after end date").
+				Mark(ierr.ErrValidation)
+		}
+	}
+
+	// When subscription is provided, validate line item and inline price dates fall within subscription bounds
+	if sub != nil {
+		subStartUTC := sub.StartDate.UTC()
+		if r.StartDate != nil {
+			startUTC := lo.FromPtr(r.StartDate).UTC()
+			if startUTC.Before(subStartUTC) {
+				return ierr.NewError("line item start_date cannot be before subscription start date").
+					WithHint("start_date must be on or after the subscription's start date.").
+					WithReportableDetails(map[string]interface{}{
+						"start_date":         r.StartDate,
+						"subscription_start": sub.StartDate,
+					}).
+					Mark(ierr.ErrValidation)
+			}
+		}
+		if !onetimeIgnoresRequestEndDate && sub.EndDate != nil && r.EndDate != nil {
+			subEndUTC := lo.FromPtr(sub.EndDate).UTC()
+			endUTC := lo.FromPtr(r.EndDate).UTC()
+			if endUTC.After(subEndUTC) {
+				return ierr.NewError("line item end_date cannot be after subscription end date").
+					WithHint("end_date must be on or before the subscription's end date when the subscription has an end date.").
+					WithReportableDetails(map[string]interface{}{
+						"end_date":         r.EndDate,
+						"subscription_end": sub.EndDate,
+					}).
+					Mark(ierr.ErrValidation)
+			}
+		}
+		if r.Price != nil {
+			if r.Price.StartDate != nil {
+				startUTC := lo.FromPtr(r.Price.StartDate).UTC()
+				if startUTC.Before(subStartUTC) {
+					return ierr.NewError("price start_date cannot be before subscription start date").
+						WithHint("price start_date must be on or after the subscription's start date.").
+						WithReportableDetails(map[string]interface{}{
+							"price_start_date":   r.Price.StartDate,
+							"subscription_start": sub.StartDate,
+						}).
+						Mark(ierr.ErrValidation)
+				}
+			}
+			if sub.EndDate != nil && r.Price.EndDate != nil {
+				subEndUTC := lo.FromPtr(sub.EndDate).UTC()
+				endUTC := lo.FromPtr(r.Price.EndDate).UTC()
+				if endUTC.After(subEndUTC) {
+					return ierr.NewError("price end_date cannot be after subscription end date").
+						WithHint("price end_date must be on or before the subscription's end date when the subscription has an end date.").
+						WithReportableDetails(map[string]interface{}{
+							"price_end_date":   r.Price.EndDate,
+							"subscription_end": sub.EndDate,
+						}).
+						Mark(ierr.ErrValidation)
+				}
+			}
+		}
+	}
+
+	// Note: inline price path (r.Price) is nil here; ONETIME billing period is validated
+	// downstream in CreatePriceRequest.Validate() for that path.
+	// ONETIME charges must use ADVANCE invoice cadence
+	if price != nil && price.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		if price.InvoiceCadence != "" && price.InvoiceCadence != types.InvoiceCadenceAdvance {
+			return ierr.NewError("ONETIME charges must have invoice_cadence ADVANCE").
+				WithHint("One-time charges are always billed in advance").
 				Mark(ierr.ErrValidation)
 		}
 	}
@@ -120,6 +278,15 @@ func (r *CreateSubscriptionLineItemRequest) Validate(price *price.Price) error {
 		return err
 	}
 
+	// When using price (inline), full price validation is done in service after injecting subscription context
+
+	if hasPrice {
+		if err := validator.ValidateRequest(r.Price); err != nil {
+			return err
+		}
+	}
+
+	// price_id path: validate against price when provided (e.g. MinQuantity)
 	if price != nil && price.Type == types.PRICE_TYPE_FIXED && price.MinQuantity != nil {
 		finalQuantity := r.Quantity
 		if finalQuantity.IsZero() {
@@ -280,6 +447,16 @@ func (r *CreateSubscriptionLineItemRequest) validateCommitmentFields() error {
 
 // ToSubscriptionLineItem converts the request to a domain subscription line item
 func (r *CreateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.Context, params LineItemParams) *subscription.SubscriptionLineItem {
+	// Resolve InvoiceCadence from price
+	invoiceCadence := types.InvoiceCadenceAdvance
+	if params.Price != nil {
+		invoiceCadence = params.Price.InvoiceCadence
+		// ONETIME charges default to ADVANCE invoice cadence if not explicitly set
+		if params.Price.BillingPeriod == types.BILLING_PERIOD_ONETIME && invoiceCadence == "" {
+			invoiceCadence = types.InvoiceCadenceAdvance
+		}
+	}
+
 	lineItem := &subscription.SubscriptionLineItem{
 		ID:                  types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION_LINE_ITEM),
 		SubscriptionID:      params.Subscription.ID,
@@ -287,9 +464,8 @@ func (r *CreateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.C
 		PriceID:             r.PriceID,
 		PriceType:           params.Price.Type,
 		Currency:            params.Subscription.Currency,
-		BillingPeriod:       params.Subscription.BillingPeriod,
-		InvoiceCadence:      params.Price.InvoiceCadence,
-		TrialPeriod:         params.Price.TrialPeriod,
+		BillingPeriod:       params.Price.BillingPeriod,
+		InvoiceCadence:      invoiceCadence,
 		EntityType:          params.EntityType,
 		Metadata:            r.Metadata,
 		SubscriptionPhaseID: r.SubscriptionPhaseID,
@@ -343,16 +519,37 @@ func (r *CreateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.C
 		lineItem.Metadata["subscription_id"] = params.Subscription.ID
 		lineItem.Metadata["addon_quantity"] = "1"
 		lineItem.Metadata["addon_status"] = string(types.AddonStatusActive)
+	} else if params.EntityType == types.SubscriptionLineItemEntityTypeSubscription && params.Subscription != nil {
+		lineItem.EntityID = params.Subscription.ID
+		if params.Price != nil && params.Price.DisplayName != "" {
+			lineItem.PlanDisplayName = params.Price.DisplayName
+		}
 	}
 
-	// Set dates
-	if r.StartDate != nil {
-		lineItem.StartDate = r.StartDate.UTC()
-	} else {
-		lineItem.StartDate = time.Now().UTC()
+	// Effective start = latest of subscription start, price start, and request start_date (when provided).
+	startDate := params.Subscription.StartDate
+	if params.Price != nil && params.Price.StartDate != nil && params.Price.StartDate.After(startDate) {
+		startDate = lo.FromPtr(params.Price.StartDate)
 	}
-	if r.EndDate != nil {
-		lineItem.EndDate = r.EndDate.UTC()
+	if r.StartDate != nil && r.StartDate.After(startDate) {
+		startDate = lo.FromPtr(r.StartDate)
+	}
+	lineItem.StartDate = startDate.UTC()
+
+	if params.Price != nil && params.Price.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		end := lineItem.StartDate.Add(time.Second)
+		if sub := params.Subscription; sub != nil && sub.EndDate != nil {
+			if se := lo.FromPtr(sub.EndDate).UTC(); end.After(se) {
+				end = se
+			}
+		}
+		lineItem.EndDate = end
+	} else if r.EndDate != nil {
+		endDateVal := r.EndDate.UTC()
+		if startDate.After(endDateVal) {
+			endDateVal = startDate.UTC()
+		}
+		lineItem.EndDate = endDateVal
 	}
 
 	// Set commitment fields if provided
@@ -370,42 +567,20 @@ func (r *CreateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.C
 	}
 	lineItem.CommitmentTrueUpEnabled = r.CommitmentTrueUpEnabled
 	lineItem.CommitmentWindowed = r.CommitmentWindowed
+	if r.CommitmentDuration != nil {
+		lineItem.CommitmentDuration = r.CommitmentDuration
+	}
 
 	return lineItem
 }
 
 // Validate validates the delete subscription line item request
 func (r *DeleteSubscriptionLineItemRequest) Validate() error {
-	// Validate effective from date is not in the past if provided
-	// Use a small buffer (5 seconds) to account for microsecond-level timing differences
-	// when effectiveFrom defaults to time.Now() and StartDate is very recent
-	// This allows effectiveFrom to be slightly before StartDate (within buffer) due to timing
-	buffer := 5 * time.Second
-	if r.EffectiveFrom != nil && r.EffectiveFrom.Before(time.Now().UTC().Add(-buffer)) {
-		return ierr.NewError("effective_from must be in the future or present").
-			WithHint("Effective from date must be in the future or present").
-			WithReportableDetails(map[string]interface{}{
-				"effective_from": r.EffectiveFrom,
-				"current_time":   time.Now().UTC(),
-			}).
-			Mark(ierr.ErrValidation)
-	}
-
 	return nil
 }
 
 // Validate validates the update subscription line item request
 func (r *UpdateSubscriptionLineItemRequest) Validate() error {
-	if r.EffectiveFrom != nil && r.EffectiveFrom.Before(time.Now().UTC()) {
-		return ierr.NewError("effective_from must be in the future").
-			WithHint("Effective from date must be in the future").
-			WithReportableDetails(map[string]interface{}{
-				"effective_from": r.EffectiveFrom,
-				"current_time":   time.Now().UTC(),
-			}).
-			Mark(ierr.ErrValidation)
-	}
-
 	// If EffectiveFrom is provided, at least one critical field must be present
 	if r.EffectiveFrom != nil && !r.ShouldCreateNewLineItem() {
 		return ierr.NewError("effective_from requires at least one critical field").
@@ -443,7 +618,8 @@ func (r *UpdateSubscriptionLineItemRequest) ShouldCreateNewLineItem() bool {
 		r.HasCommitment() ||
 		r.CommitmentOverageFactor != nil ||
 		r.CommitmentTrueUpEnabled != nil ||
-		r.CommitmentWindowed != nil
+		r.CommitmentWindowed != nil ||
+		r.CommitmentDuration != nil
 }
 
 // ToSubscriptionLineItem converts the update request to a domain subscription line item
@@ -459,7 +635,6 @@ func (r *UpdateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.C
 		Currency:         existingLineItem.Currency,
 		BillingPeriod:    existingLineItem.BillingPeriod,
 		InvoiceCadence:   existingLineItem.InvoiceCadence,
-		TrialPeriod:      existingLineItem.TrialPeriod,
 		EntityType:       existingLineItem.EntityType,
 		EntityID:         existingLineItem.EntityID,
 		PlanDisplayName:  existingLineItem.PlanDisplayName,
@@ -513,6 +688,12 @@ func (r *UpdateSubscriptionLineItemRequest) ToSubscriptionLineItem(ctx context.C
 		newLineItem.CommitmentWindowed = *r.CommitmentWindowed
 	} else {
 		newLineItem.CommitmentWindowed = existingLineItem.CommitmentWindowed
+	}
+
+	if r.CommitmentDuration != nil {
+		newLineItem.CommitmentDuration = r.CommitmentDuration
+	} else {
+		newLineItem.CommitmentDuration = existingLineItem.CommitmentDuration
 	}
 
 	return newLineItem

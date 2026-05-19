@@ -63,9 +63,15 @@ const (
 	PrefixConnection               = "connection:v1:"
 	PrefixSettings                 = "settings:v1:"
 	PrefixSubscriptionLineItem     = "subscription_line_item:v1:"
+	PrefixInvoiceLineItem          = "invoice_line_item:v1:"
 	PrefixWalletAlertThrottle      = "wallet_alert_throttle:v1:"
 	PrefixCostsheet                = "costsheet:v1:"
 	PrefixPriceUnit                = "price_unit:v1:"
+	PrefixWalletRealTimeBalance    = "wallet_realtime_balance:v1:"
+	PrefixWorkflowExecution        = "workflow_execution:v1:"
+	// PrefixPriceSyncLock is the Redis key prefix for plan-level price sync lock (used with planID).
+	// Used by both API (acquire) and Temporal activity (release); do not change without updating both.
+	PrefixPriceSyncLock = "price_sync:plan:"
 )
 
 // GenerateKey creates a cache key from a prefix and a set of parameters

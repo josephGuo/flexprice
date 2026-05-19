@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 
-	"log"
 	"strings"
 	"time"
 
@@ -36,6 +35,34 @@ func safeDecimalFromFloat(f float64) decimal.Decimal {
 		return decimal.Zero
 	}
 	return decimal.NewFromFloat(f)
+}
+
+// clampToZero returns zero if d is negative, otherwise returns d unchanged.
+func clampToZero(d decimal.Decimal) decimal.Decimal {
+	if d.LessThan(decimal.Zero) {
+		return decimal.Zero
+	}
+	return d
+}
+
+// scanBucketedRow scans a row from a bucketed aggregation query.
+// Returns (total, value, windowSize, groupKey, error). groupKey is empty when hasGroupBy is false.
+func scanBucketedRow(rows interface{ Scan(...any) error }, hasGroupBy bool) (total, value decimal.Decimal, windowSize time.Time, groupKey string, err error) {
+	var totalFloat, valueFloat float64
+	if hasGroupBy {
+		if err = rows.Scan(&totalFloat, &windowSize, &valueFloat, &groupKey); err != nil {
+			return decimal.Zero, decimal.Zero, time.Time{}, "", ierr.WithError(err).
+				WithHint("Failed to scan bucketed result with group_key").
+				Mark(ierr.ErrDatabase)
+		}
+	} else {
+		if err = rows.Scan(&totalFloat, &windowSize, &valueFloat); err != nil {
+			return decimal.Zero, decimal.Zero, time.Time{}, "", ierr.WithError(err).
+				WithHint("Failed to scan bucketed result").
+				Mark(ierr.ErrDatabase)
+		}
+	}
+	return clampToZero(safeDecimalFromFloat(totalFloat)), clampToZero(safeDecimalFromFloat(valueFloat)), windowSize, groupKey, nil
 }
 
 func (r *EventRepository) InsertEvent(ctx context.Context, event *events.Event) error {
@@ -237,7 +264,6 @@ func (r *EventRepository) GetUsage(ctx context.Context, params *events.UsagePara
 	}
 
 	query := aggregator.GetQuery(ctx, params)
-	log.Printf("Executing query: %s", query)
 
 	rows, err := r.store.GetConn().Query(ctx, query)
 	if err != nil {
@@ -261,7 +287,6 @@ func (r *EventRepository) GetUsage(ctx context.Context, params *events.UsagePara
 		for rows.Next() {
 			var windowSize time.Time
 			var value decimal.Decimal
-			var total decimal.Decimal
 
 			switch params.AggregationType {
 			case types.AggregationCount, types.AggregationCountUnique:
@@ -279,35 +304,35 @@ func (r *EventRepository) GetUsage(ctx context.Context, params *events.UsagePara
 				value = decimal.NewFromUint64(countValue)
 			case types.AggregationMax, types.AggregationSum:
 				if params.BucketSize != "" {
-					var totalFloat, valueFloat float64
-					if err := rows.Scan(&totalFloat, &windowSize, &valueFloat); err != nil {
+					hasGroupBy := params.AggregationType == types.AggregationMax &&
+						params.GroupByProperty != "" &&
+						validateGroupByProperty(params.GroupByProperty) == nil
+
+					bucketTotal, bucketValue, bucketTime, groupKey, err := scanBucketedRow(rows, hasGroupBy)
+					if err != nil {
 						SetSpanError(span, err)
-						return nil, ierr.WithError(err).
-							WithHint("Failed to scan float result").
-							WithReportableDetails(map[string]interface{}{
-								"window_size": windowSize,
-								"value":       valueFloat,
-								"total":       totalFloat,
-							}).
-							Mark(ierr.ErrDatabase)
+						return nil, err
 					}
-					total = safeDecimalFromFloat(totalFloat)
-					value = safeDecimalFromFloat(valueFloat)
-					// Set the overall max/sum as the result value
-					result.Value = total
+					result.Value = bucketTotal
+					windowSize = bucketTime
+					value = bucketValue
+					if hasGroupBy {
+						result.Results = append(result.Results, events.UsageResult{
+							WindowSize: bucketTime,
+							Value:      bucketValue,
+							GroupKey:   groupKey,
+						})
+						continue
+					}
 				} else {
 					var floatValue float64
 					if err := rows.Scan(&windowSize, &floatValue); err != nil {
 						SetSpanError(span, err)
 						return nil, ierr.WithError(err).
 							WithHint("Failed to scan float result").
-							WithReportableDetails(map[string]interface{}{
-								"window_size": windowSize,
-								"float_value": floatValue,
-							}).
 							Mark(ierr.ErrDatabase)
 					}
-					value = safeDecimalFromFloat(floatValue)
+					value = clampToZero(safeDecimalFromFloat(floatValue))
 				}
 			case types.AggregationAvg, types.AggregationLatest, types.AggregationSumWithMultiplier, types.AggregationWeightedSum:
 				var floatValue float64
@@ -323,8 +348,8 @@ func (r *EventRepository) GetUsage(ctx context.Context, params *events.UsagePara
 				}
 				value = safeDecimalFromFloat(floatValue)
 
-				// For Latest aggregation, return 0 if negative
-				if params.AggregationType == types.AggregationLatest && value.LessThan(decimal.Zero) {
+				// Ensure negative values are treated as zero for all aggregation types
+				if value.LessThan(decimal.Zero) {
 					value = decimal.Zero
 				}
 			default:
@@ -371,8 +396,8 @@ func (r *EventRepository) GetUsage(ctx context.Context, params *events.UsagePara
 				}
 				result.Value = safeDecimalFromFloat(value)
 
-				// For Latest aggregation, return 0 if negative
-				if params.AggregationType == types.AggregationLatest && result.Value.LessThan(decimal.Zero) {
+				// Ensure negative values are treated as zero for all aggregation types
+				if result.Value.LessThan(decimal.Zero) {
 					result.Value = decimal.Zero
 				}
 			default:
@@ -961,49 +986,56 @@ func (r *EventRepository) FindUnprocessedEventsFromFeatureUsage(ctx context.Cont
 	return eventsList, nil
 }
 
-// GetDistinctEventNames retrieves distinct event names for a given external customer
-// within the specified time range. This is used for performance optimization
-// to filter meter requests to only those that have actual events.
-func (r *EventRepository) GetDistinctEventNames(ctx context.Context, externalCustomerID string, startTime, endTime time.Time) ([]string, error) {
-	// Start a span for this repository operation
+// GetDistinctEventNames retrieves distinct event names for the given external customer IDs
+func (r *EventRepository) GetDistinctEventNames(ctx context.Context, externalCustomerIDs []string, startTime, endTime time.Time) ([]string, error) {
+	if len(externalCustomerIDs) == 0 {
+		return nil, nil
+	}
+
 	span := StartRepositorySpan(ctx, "event", "get_distinct_event_names", map[string]interface{}{
-		"external_customer_id": externalCustomerID,
-		"start_time":           startTime,
-		"end_time":             endTime,
+		"external_customer_id_count": len(externalCustomerIDs),
+		"start_time":                 startTime,
+		"end_time":                   endTime,
 	})
 	defer FinishSpan(span)
-
-	query := `
-		SELECT DISTINCT event_name 
-		FROM events 
-		WHERE tenant_id = ?
-		AND environment_id = ?
-		AND external_customer_id = ?
-	`
 
 	args := []interface{}{
 		types.GetTenantID(ctx),
 		types.GetEnvironmentID(ctx),
-		externalCustomerID,
 	}
 
-	// Add time filters if provided
+	var customerFilter string
+	if len(externalCustomerIDs) == 1 {
+		customerFilter = "AND external_customer_id = ?"
+		args = append(args, externalCustomerIDs[0])
+	} else {
+		placeholders := make([]string, len(externalCustomerIDs))
+		for i, id := range externalCustomerIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		customerFilter = "AND external_customer_id IN (" + strings.Join(placeholders, ", ") + ")"
+	}
+
+	query := `
+		SELECT DISTINCT event_name
+		FROM events
+		WHERE tenant_id = ?
+		AND environment_id = ?
+		` + customerFilter
+
 	if !startTime.IsZero() {
 		query += " AND timestamp >= ?"
 		args = append(args, startTime)
 	}
-
 	if !endTime.IsZero() {
 		query += " AND timestamp <= ?"
 		args = append(args, endTime)
 	}
-
-	// Order by event_name for consistent results
 	query += " ORDER BY event_name"
 
 	r.logger.Debugw("executing get distinct event names query",
-		"query", query,
-		"external_customer_id", externalCustomerID,
+		"external_customer_id_count", len(externalCustomerIDs),
 		"start_time", startTime,
 		"end_time", endTime)
 
@@ -1013,7 +1045,7 @@ func (r *EventRepository) GetDistinctEventNames(ctx context.Context, externalCus
 		return nil, ierr.WithError(err).
 			WithHint("Failed to query distinct event names").
 			WithReportableDetails(map[string]interface{}{
-				"external_customer_id": externalCustomerID,
+				"external_customer_id_count": len(externalCustomerIDs),
 			}).
 			Mark(ierr.ErrDatabase)
 	}
@@ -1039,9 +1071,8 @@ func (r *EventRepository) GetDistinctEventNames(ctx context.Context, externalCus
 	}
 
 	r.logger.Debugw("retrieved distinct event names",
-		"external_customer_id", externalCustomerID,
-		"event_count", len(eventNames),
-		"event_names", eventNames)
+		"external_customer_id_count", len(externalCustomerIDs),
+		"event_count", len(eventNames))
 
 	SetSpanSuccess(span)
 	return eventNames, nil
@@ -1165,4 +1196,141 @@ func (r *EventRepository) GetTotalEventCount(ctx context.Context, startTime, end
 
 	SetSpanSuccess(span)
 	return result, nil
+}
+
+func (r *EventRepository) GetEventByID(ctx context.Context, eventID string) (*events.Event, error) {
+	span := StartRepositorySpan(ctx, "event", "get_event_by_id", map[string]interface{}{
+		"event_id": eventID,
+	})
+	defer FinishSpan(span)
+
+	query := `
+		SELECT 
+			id,
+			external_customer_id,
+			customer_id,
+			tenant_id,
+			event_name,
+			timestamp,
+			source,
+			properties,
+			environment_id,
+			ingested_at
+		FROM events
+		WHERE tenant_id = ?
+		AND environment_id = ?
+		AND id = ?
+		LIMIT 1
+	`
+	args := []interface{}{
+		types.GetTenantID(ctx),
+		types.GetEnvironmentID(ctx),
+		eventID,
+	}
+
+	var event events.Event
+	var propertiesJSON string
+
+	err := r.store.GetConn().QueryRow(ctx, query, args...).Scan(
+		&event.ID,
+		&event.ExternalCustomerID,
+		&event.CustomerID,
+		&event.TenantID,
+		&event.EventName,
+		&event.Timestamp,
+		&event.Source,
+		&propertiesJSON,
+		&event.EnvironmentID,
+		&event.IngestedAt,
+	)
+
+	if err != nil {
+		SetSpanError(span, err)
+		if err.Error() == "sql: no rows in result set" {
+			return nil, ierr.WithError(err).
+				WithHint("Event not found in events table").
+				WithReportableDetails(map[string]interface{}{
+					"event_id": eventID,
+				}).
+				Mark(ierr.ErrNotFound)
+		}
+		return nil, ierr.WithError(err).
+			WithHint("Failed to get event").
+			WithReportableDetails(map[string]interface{}{
+				"event_id": eventID,
+			}).
+			Mark(ierr.ErrDatabase)
+	}
+
+	if err := json.Unmarshal([]byte(propertiesJSON), &event.Properties); err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).
+			WithHint("Failed to unmarshal event properties").
+			WithReportableDetails(map[string]interface{}{
+				"event_id":   eventID,
+				"properties": propertiesJSON,
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	SetSpanSuccess(span)
+	return &event, nil
+}
+
+// GetDistinctEventNames retrieves distinct event names for the given external customer IDs
+func (r *EventRepository) GetDistinctExternalCustomerIDs(ctx context.Context, startTime, endTime time.Time) ([]string, error) {
+	span := StartRepositorySpan(ctx, "event", "get_distinct_external_customer_ids", map[string]interface{}{
+		"start_time": startTime,
+		"end_time":   endTime,
+	})
+	defer FinishSpan(span)
+
+	args := []interface{}{
+		types.GetTenantID(ctx),
+		types.GetEnvironmentID(ctx),
+	}
+
+	query := `
+		SELECT DISTINCT external_customer_id
+		FROM events
+		WHERE tenant_id = ?
+		AND environment_id = ?
+		`
+
+	if !startTime.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, startTime)
+	}
+	if !endTime.IsZero() {
+		query += " AND timestamp <= ?"
+		args = append(args, endTime)
+	}
+
+	r.logger.Debugw("executing get distinct external customer ids query",
+		"start_time", startTime,
+		"end_time", endTime)
+
+	rows, err := r.store.GetConn().Query(ctx, query, args...)
+	if err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).
+			WithHint("Failed to query distinct external customer ids").
+			Mark(ierr.ErrDatabase)
+	}
+	defer rows.Close()
+
+	var externalCustomerIDs []string
+	for rows.Next() {
+		var externalCustomerID string
+		if err := rows.Scan(&externalCustomerID); err != nil {
+			SetSpanError(span, err)
+			return nil, ierr.WithError(err).
+				WithHint("Failed to scan external customer id").
+				Mark(ierr.ErrDatabase)
+		}
+		externalCustomerIDs = append(externalCustomerIDs, externalCustomerID)
+	}
+
+	SetSpanSuccess(span)
+	return externalCustomerIDs, nil
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/flexprice/flexprice/internal/cache"
 	"github.com/flexprice/flexprice/internal/config"
+	"github.com/flexprice/flexprice/internal/domain/addon"
 	"github.com/flexprice/flexprice/internal/domain/addonassociation"
 	"github.com/flexprice/flexprice/internal/domain/alertlogs"
 	"github.com/flexprice/flexprice/internal/domain/auth"
@@ -58,6 +59,7 @@ type Stores struct {
 	SubscriptionRepo             subscription.Repository
 	SubscriptionLineItemRepo     subscription.LineItemRepository
 	SubscriptionPhaseRepo        subscription.SubscriptionPhaseRepository
+	SubscriptionScheduleRepo     subscription.SubscriptionScheduleRepository
 	EventRepo                    events.Repository
 	PlanRepo                     plan.Repository
 	PriceRepo                    price.Repository
@@ -65,6 +67,7 @@ type Stores struct {
 	MeterRepo                    meter.Repository
 	CustomerRepo                 customer.Repository
 	InvoiceRepo                  invoice.Repository
+	InvoiceLineItemRepo          invoice.LineItemRepository
 	WalletRepo                   wallet.Repository
 	PaymentRepo                  payment.Repository
 	AuthRepo                     auth.Repository
@@ -83,12 +86,14 @@ type Stores struct {
 	CouponRepo                   coupon.Repository
 	CouponAssociationRepo        coupon_association.Repository
 	CouponApplicationRepo        coupon_application.Repository
+	AddonRepo                    addon.Repository
 	AddonAssociationRepo         addonassociation.Repository
 	ConnectionRepo               connection.Repository
 	EntityIntegrationMappingRepo entityintegrationmapping.Repository
 	SettingsRepo                 settings.Repository
 	AlertLogsRepo                alertlogs.Repository
 	FeatureUsageRepo             events.FeatureUsageRepository
+	MeterUsageRepo               events.MeterUsageRepository
 }
 
 // BaseServiceTestSuite provides common functionality for all service test suites
@@ -129,7 +134,7 @@ func (s *BaseServiceTestSuite) SetupSuite() {
 	}
 
 	// Initialize cache
-	cache.Initialize(s.logger)
+	cache.Initialize(cfg, s.logger)
 }
 
 func (s *BaseServiceTestSuite) setupDependencies() {
@@ -139,7 +144,7 @@ func (s *BaseServiceTestSuite) setupDependencies() {
 	eventStore := s.stores.EventRepo.(*InMemoryEventStore)
 	s.publisher = NewInMemoryEventPublisher(eventStore)
 	pubsub := NewInMemoryPubSub()
-	webhookPublisher, err := webhookPublisher.NewPublisher(pubsub, s.config, s.logger)
+	webhookPublisher, err := webhookPublisher.NewPublisher(pubsub, s.config, s.logger, nil)
 	if err != nil {
 		s.T().Fatalf("failed to create webhook publisher: %v", err)
 	}
@@ -188,17 +193,25 @@ func (s *BaseServiceTestSuite) setupContext() {
 }
 
 func (s *BaseServiceTestSuite) setupStores() {
+	subStore := NewInMemorySubscriptionStore()
+	lineItemStore := NewInMemorySubscriptionLineItemStore()
+	subStore.SetLineItemStore(lineItemStore)
+	invLineItemStore := NewInMemoryInvoiceLineItemStore()
+	invoiceStore := NewInMemoryInvoiceStore()
+	invoiceStore.SetLineItemStore(invLineItemStore)
 	s.stores = Stores{
-		SubscriptionRepo:             NewInMemorySubscriptionStore(),
-		SubscriptionLineItemRepo:     NewInMemorySubscriptionLineItemStore(),
+		SubscriptionRepo:             subStore,
+		SubscriptionLineItemRepo:     lineItemStore,
 		SubscriptionPhaseRepo:        NewInMemorySubscriptionPhaseStore(),
+		SubscriptionScheduleRepo:     NewInMemorySubscriptionScheduleStore(),
 		EventRepo:                    NewInMemoryEventStore(),
 		PlanRepo:                     NewInMemoryPlanStore(),
 		PriceRepo:                    NewInMemoryPriceStore(),
 		PriceUnitRepo:                NewInMemoryPriceUnitStore(),
 		MeterRepo:                    NewInMemoryMeterStore(),
 		CustomerRepo:                 NewInMemoryCustomerStore(),
-		InvoiceRepo:                  NewInMemoryInvoiceStore(),
+		InvoiceRepo:                  invoiceStore,
+		InvoiceLineItemRepo:          invLineItemStore,
 		WalletRepo:                   NewInMemoryWalletStore(),
 		PaymentRepo:                  NewInMemoryPaymentStore(),
 		AuthRepo:                     NewInMemoryAuthRepository(),
@@ -219,12 +232,14 @@ func (s *BaseServiceTestSuite) setupStores() {
 		CouponRepo:                   NewInMemoryCouponStore(),
 		CouponAssociationRepo:        NewInMemoryCouponAssociationStore(),
 		CouponApplicationRepo:        NewInMemoryCouponApplicationStore(),
+		AddonRepo:                    NewInMemoryAddonStore(),
 		AddonAssociationRepo:         NewInMemoryAddonAssociationStore(),
 		ConnectionRepo:               NewInMemoryConnectionStore(),
 		EntityIntegrationMappingRepo: NewInMemoryEntityIntegrationMappingStore(),
 		SettingsRepo:                 NewInMemorySettingsStore(),
 		AlertLogsRepo:                NewInMemoryAlertLogsStore(),
 		FeatureUsageRepo:             NewInMemoryFeatureUsageStore(),
+		MeterUsageRepo:               NewInMemoryMeterUsageStore(),
 	}
 
 	s.db = NewMockPostgresClient(s.logger)
@@ -232,7 +247,7 @@ func (s *BaseServiceTestSuite) setupStores() {
 	eventStore := s.stores.EventRepo.(*InMemoryEventStore)
 	s.publisher = NewInMemoryEventPublisher(eventStore)
 	pubsub := NewInMemoryPubSub()
-	webhookPublisher, err := webhookPublisher.NewPublisher(pubsub, s.config, s.logger)
+	webhookPublisher, err := webhookPublisher.NewPublisher(pubsub, s.config, s.logger, nil)
 	if err != nil {
 		s.T().Fatalf("failed to create webhook publisher: %v", err)
 	}
@@ -248,6 +263,7 @@ func (s *BaseServiceTestSuite) clearStores() {
 	s.stores.MeterRepo.(*InMemoryMeterStore).Clear()
 	s.stores.CustomerRepo.(*InMemoryCustomerStore).Clear()
 	s.stores.InvoiceRepo.(*InMemoryInvoiceStore).Clear()
+	s.stores.InvoiceLineItemRepo.(*InMemoryInvoiceLineItemStore).Clear()
 	s.stores.WalletRepo.(*InMemoryWalletStore).Clear()
 	s.stores.PaymentRepo.(*InMemoryPaymentStore).Clear()
 	s.stores.AuthRepo.(*InMemoryAuthRepository).Clear()
@@ -270,11 +286,14 @@ func (s *BaseServiceTestSuite) clearStores() {
 	s.stores.CouponRepo.(*InMemoryCouponStore).Clear()
 	s.stores.CouponAssociationRepo.(*InMemoryCouponAssociationStore).Clear()
 	s.stores.CouponApplicationRepo.(*InMemoryCouponApplicationStore).Clear()
+	s.stores.AddonRepo.(*InMemoryAddonStore).Clear()
 	s.stores.AddonAssociationRepo.(*InMemoryAddonAssociationStore).Clear()
 	s.stores.SettingsRepo.(*InMemorySettingsStore).Clear()
 	s.stores.SubscriptionLineItemRepo.(*InMemorySubscriptionLineItemStore).Clear()
 	s.stores.SubscriptionPhaseRepo.(*InMemorySubscriptionPhaseStore).Clear()
 	s.stores.AlertLogsRepo.(*InMemoryAlertLogsStore).Clear()
+	s.stores.FeatureUsageRepo.(*InMemoryFeatureUsageStore).Clear()
+	s.stores.MeterUsageRepo.(*InMemoryMeterUsageStore).Clear()
 }
 
 func (s *BaseServiceTestSuite) ClearStores() {

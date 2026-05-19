@@ -382,6 +382,46 @@ func (_u *InvoiceUpdate) ClearFinalizedAt() *InvoiceUpdate {
 	return _u
 }
 
+// SetIssueDate sets the "issue_date" field.
+func (iu *InvoiceUpdate) SetIssueDate(t time.Time) *InvoiceUpdate {
+	iu.mutation.SetIssueDate(t)
+	return iu
+}
+
+// SetNillableIssueDate sets the "issue_date" field if the given value is not nil.
+func (iu *InvoiceUpdate) SetNillableIssueDate(t *time.Time) *InvoiceUpdate {
+	if t != nil {
+		iu.SetIssueDate(*t)
+	}
+	return iu
+}
+
+// ClearIssueDate clears the value of the "issue_date" field.
+func (iu *InvoiceUpdate) ClearIssueDate() *InvoiceUpdate {
+	iu.mutation.ClearIssueDate()
+	return iu
+}
+
+// SetLastComputedAt sets the "last_computed_at" field.
+func (iu *InvoiceUpdate) SetLastComputedAt(t time.Time) *InvoiceUpdate {
+	iu.mutation.SetLastComputedAt(t)
+	return iu
+}
+
+// SetNillableLastComputedAt sets the "last_computed_at" field if the given value is not nil.
+func (iu *InvoiceUpdate) SetNillableLastComputedAt(t *time.Time) *InvoiceUpdate {
+	if t != nil {
+		iu.SetLastComputedAt(*t)
+	}
+	return iu
+}
+
+// ClearLastComputedAt clears the value of the "last_computed_at" field.
+func (iu *InvoiceUpdate) ClearLastComputedAt() *InvoiceUpdate {
+	iu.mutation.ClearLastComputedAt()
+	return iu
+}
+
 // SetInvoicePdfURL sets the "invoice_pdf_url" field.
 func (_u *InvoiceUpdate) SetInvoicePdfURL(v string) *InvoiceUpdate {
 	_u.mutation.SetInvoicePdfURL(v)
@@ -502,6 +542,26 @@ func (_u *InvoiceUpdate) ClearBillingSequence() *InvoiceUpdate {
 	return _u
 }
 
+// SetTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field.
+func (iu *InvoiceUpdate) SetTotalPrepaidCreditsApplied(d decimal.Decimal) *InvoiceUpdate {
+	iu.mutation.SetTotalPrepaidCreditsApplied(d)
+	return iu
+}
+
+// SetNillableTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field if the given value is not nil.
+func (iu *InvoiceUpdate) SetNillableTotalPrepaidCreditsApplied(d *decimal.Decimal) *InvoiceUpdate {
+	if d != nil {
+		iu.SetTotalPrepaidCreditsApplied(*d)
+	}
+	return iu
+}
+
+// ClearTotalPrepaidCreditsApplied clears the value of the "total_prepaid_credits_applied" field.
+func (iu *InvoiceUpdate) ClearTotalPrepaidCreditsApplied() *InvoiceUpdate {
+	iu.mutation.ClearTotalPrepaidCreditsApplied()
+	return iu
+}
+
 // SetIdempotencyKey sets the "idempotency_key" field.
 func (_u *InvoiceUpdate) SetIdempotencyKey(v string) *InvoiceUpdate {
 	_u.mutation.SetIdempotencyKey(v)
@@ -520,6 +580,26 @@ func (_u *InvoiceUpdate) SetNillableIdempotencyKey(v *string) *InvoiceUpdate {
 func (_u *InvoiceUpdate) ClearIdempotencyKey() *InvoiceUpdate {
 	_u.mutation.ClearIdempotencyKey()
 	return _u
+}
+
+// SetRecalculatedInvoiceID sets the "recalculated_invoice_id" field.
+func (iu *InvoiceUpdate) SetRecalculatedInvoiceID(s string) *InvoiceUpdate {
+	iu.mutation.SetRecalculatedInvoiceID(s)
+	return iu
+}
+
+// SetNillableRecalculatedInvoiceID sets the "recalculated_invoice_id" field if the given value is not nil.
+func (iu *InvoiceUpdate) SetNillableRecalculatedInvoiceID(s *string) *InvoiceUpdate {
+	if s != nil {
+		iu.SetRecalculatedInvoiceID(*s)
+	}
+	return iu
+}
+
+// ClearRecalculatedInvoiceID clears the value of the "recalculated_invoice_id" field.
+func (iu *InvoiceUpdate) ClearRecalculatedInvoiceID() *InvoiceUpdate {
+	iu.mutation.ClearRecalculatedInvoiceID()
+	return iu
 }
 
 // AddLineItemIDs adds the "line_items" edge to the InvoiceLineItem entity by IDs.
@@ -668,6 +748,9 @@ func (_u *InvoiceUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.SubscriptionIDCleared() {
 		_spec.ClearField(invoice.FieldSubscriptionID, field.TypeString)
 	}
+	if _u.mutation.SubscriptionCustomerIDCleared() {
+		_spec.ClearField(invoice.FieldSubscriptionCustomerID, field.TypeString)
+	}
 	if value, ok := _u.mutation.InvoiceStatus(); ok {
 		_spec.SetField(invoice.FieldInvoiceStatus, field.TypeString, value)
 	}
@@ -749,6 +832,18 @@ func (_u *InvoiceUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.FinalizedAtCleared() {
 		_spec.ClearField(invoice.FieldFinalizedAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.IssueDate(); ok {
+		_spec.SetField(invoice.FieldIssueDate, field.TypeTime, value)
+	}
+	if _u.mutation.IssueDateCleared() {
+		_spec.ClearField(invoice.FieldIssueDate, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LastComputedAt(); ok {
+		_spec.SetField(invoice.FieldLastComputedAt, field.TypeTime, value)
+	}
+	if _u.mutation.LastComputedAtCleared() {
+		_spec.ClearField(invoice.FieldLastComputedAt, field.TypeTime)
+	}
 	if _u.mutation.BillingPeriodCleared() {
 		_spec.ClearField(invoice.FieldBillingPeriod, field.TypeString)
 	}
@@ -797,11 +892,23 @@ func (_u *InvoiceUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.BillingSequenceCleared() {
 		_spec.ClearField(invoice.FieldBillingSequence, field.TypeInt)
 	}
+	if value, ok := _u.mutation.TotalPrepaidCreditsApplied(); ok {
+		_spec.SetField(invoice.FieldTotalPrepaidCreditsApplied, field.TypeOther, value)
+	}
+	if _u.mutation.TotalPrepaidCreditsAppliedCleared() {
+		_spec.ClearField(invoice.FieldTotalPrepaidCreditsApplied, field.TypeOther)
+	}
 	if value, ok := _u.mutation.IdempotencyKey(); ok {
 		_spec.SetField(invoice.FieldIdempotencyKey, field.TypeString, value)
 	}
 	if _u.mutation.IdempotencyKeyCleared() {
 		_spec.ClearField(invoice.FieldIdempotencyKey, field.TypeString)
+	}
+	if value, ok := _u.mutation.RecalculatedInvoiceID(); ok {
+		_spec.SetField(invoice.FieldRecalculatedInvoiceID, field.TypeString, value)
+	}
+	if _u.mutation.RecalculatedInvoiceIDCleared() {
+		_spec.ClearField(invoice.FieldRecalculatedInvoiceID, field.TypeString)
 	}
 	if _u.mutation.LineItemsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1263,6 +1370,46 @@ func (_u *InvoiceUpdateOne) ClearFinalizedAt() *InvoiceUpdateOne {
 	return _u
 }
 
+// SetIssueDate sets the "issue_date" field.
+func (iuo *InvoiceUpdateOne) SetIssueDate(t time.Time) *InvoiceUpdateOne {
+	iuo.mutation.SetIssueDate(t)
+	return iuo
+}
+
+// SetNillableIssueDate sets the "issue_date" field if the given value is not nil.
+func (iuo *InvoiceUpdateOne) SetNillableIssueDate(t *time.Time) *InvoiceUpdateOne {
+	if t != nil {
+		iuo.SetIssueDate(*t)
+	}
+	return iuo
+}
+
+// ClearIssueDate clears the value of the "issue_date" field.
+func (iuo *InvoiceUpdateOne) ClearIssueDate() *InvoiceUpdateOne {
+	iuo.mutation.ClearIssueDate()
+	return iuo
+}
+
+// SetLastComputedAt sets the "last_computed_at" field.
+func (iuo *InvoiceUpdateOne) SetLastComputedAt(t time.Time) *InvoiceUpdateOne {
+	iuo.mutation.SetLastComputedAt(t)
+	return iuo
+}
+
+// SetNillableLastComputedAt sets the "last_computed_at" field if the given value is not nil.
+func (iuo *InvoiceUpdateOne) SetNillableLastComputedAt(t *time.Time) *InvoiceUpdateOne {
+	if t != nil {
+		iuo.SetLastComputedAt(*t)
+	}
+	return iuo
+}
+
+// ClearLastComputedAt clears the value of the "last_computed_at" field.
+func (iuo *InvoiceUpdateOne) ClearLastComputedAt() *InvoiceUpdateOne {
+	iuo.mutation.ClearLastComputedAt()
+	return iuo
+}
+
 // SetInvoicePdfURL sets the "invoice_pdf_url" field.
 func (_u *InvoiceUpdateOne) SetInvoicePdfURL(v string) *InvoiceUpdateOne {
 	_u.mutation.SetInvoicePdfURL(v)
@@ -1383,6 +1530,26 @@ func (_u *InvoiceUpdateOne) ClearBillingSequence() *InvoiceUpdateOne {
 	return _u
 }
 
+// SetTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field.
+func (iuo *InvoiceUpdateOne) SetTotalPrepaidCreditsApplied(d decimal.Decimal) *InvoiceUpdateOne {
+	iuo.mutation.SetTotalPrepaidCreditsApplied(d)
+	return iuo
+}
+
+// SetNillableTotalPrepaidCreditsApplied sets the "total_prepaid_credits_applied" field if the given value is not nil.
+func (iuo *InvoiceUpdateOne) SetNillableTotalPrepaidCreditsApplied(d *decimal.Decimal) *InvoiceUpdateOne {
+	if d != nil {
+		iuo.SetTotalPrepaidCreditsApplied(*d)
+	}
+	return iuo
+}
+
+// ClearTotalPrepaidCreditsApplied clears the value of the "total_prepaid_credits_applied" field.
+func (iuo *InvoiceUpdateOne) ClearTotalPrepaidCreditsApplied() *InvoiceUpdateOne {
+	iuo.mutation.ClearTotalPrepaidCreditsApplied()
+	return iuo
+}
+
 // SetIdempotencyKey sets the "idempotency_key" field.
 func (_u *InvoiceUpdateOne) SetIdempotencyKey(v string) *InvoiceUpdateOne {
 	_u.mutation.SetIdempotencyKey(v)
@@ -1401,6 +1568,26 @@ func (_u *InvoiceUpdateOne) SetNillableIdempotencyKey(v *string) *InvoiceUpdateO
 func (_u *InvoiceUpdateOne) ClearIdempotencyKey() *InvoiceUpdateOne {
 	_u.mutation.ClearIdempotencyKey()
 	return _u
+}
+
+// SetRecalculatedInvoiceID sets the "recalculated_invoice_id" field.
+func (iuo *InvoiceUpdateOne) SetRecalculatedInvoiceID(s string) *InvoiceUpdateOne {
+	iuo.mutation.SetRecalculatedInvoiceID(s)
+	return iuo
+}
+
+// SetNillableRecalculatedInvoiceID sets the "recalculated_invoice_id" field if the given value is not nil.
+func (iuo *InvoiceUpdateOne) SetNillableRecalculatedInvoiceID(s *string) *InvoiceUpdateOne {
+	if s != nil {
+		iuo.SetRecalculatedInvoiceID(*s)
+	}
+	return iuo
+}
+
+// ClearRecalculatedInvoiceID clears the value of the "recalculated_invoice_id" field.
+func (iuo *InvoiceUpdateOne) ClearRecalculatedInvoiceID() *InvoiceUpdateOne {
+	iuo.mutation.ClearRecalculatedInvoiceID()
+	return iuo
 }
 
 // AddLineItemIDs adds the "line_items" edge to the InvoiceLineItem entity by IDs.
@@ -1579,6 +1766,9 @@ func (_u *InvoiceUpdateOne) sqlSave(ctx context.Context) (_node *Invoice, err er
 	if _u.mutation.SubscriptionIDCleared() {
 		_spec.ClearField(invoice.FieldSubscriptionID, field.TypeString)
 	}
+	if _u.mutation.SubscriptionCustomerIDCleared() {
+		_spec.ClearField(invoice.FieldSubscriptionCustomerID, field.TypeString)
+	}
 	if value, ok := _u.mutation.InvoiceStatus(); ok {
 		_spec.SetField(invoice.FieldInvoiceStatus, field.TypeString, value)
 	}
@@ -1660,6 +1850,18 @@ func (_u *InvoiceUpdateOne) sqlSave(ctx context.Context) (_node *Invoice, err er
 	if _u.mutation.FinalizedAtCleared() {
 		_spec.ClearField(invoice.FieldFinalizedAt, field.TypeTime)
 	}
+	if value, ok := _u.mutation.IssueDate(); ok {
+		_spec.SetField(invoice.FieldIssueDate, field.TypeTime, value)
+	}
+	if _u.mutation.IssueDateCleared() {
+		_spec.ClearField(invoice.FieldIssueDate, field.TypeTime)
+	}
+	if value, ok := _u.mutation.LastComputedAt(); ok {
+		_spec.SetField(invoice.FieldLastComputedAt, field.TypeTime, value)
+	}
+	if _u.mutation.LastComputedAtCleared() {
+		_spec.ClearField(invoice.FieldLastComputedAt, field.TypeTime)
+	}
 	if _u.mutation.BillingPeriodCleared() {
 		_spec.ClearField(invoice.FieldBillingPeriod, field.TypeString)
 	}
@@ -1708,11 +1910,23 @@ func (_u *InvoiceUpdateOne) sqlSave(ctx context.Context) (_node *Invoice, err er
 	if _u.mutation.BillingSequenceCleared() {
 		_spec.ClearField(invoice.FieldBillingSequence, field.TypeInt)
 	}
+	if value, ok := _u.mutation.TotalPrepaidCreditsApplied(); ok {
+		_spec.SetField(invoice.FieldTotalPrepaidCreditsApplied, field.TypeOther, value)
+	}
+	if _u.mutation.TotalPrepaidCreditsAppliedCleared() {
+		_spec.ClearField(invoice.FieldTotalPrepaidCreditsApplied, field.TypeOther)
+	}
 	if value, ok := _u.mutation.IdempotencyKey(); ok {
 		_spec.SetField(invoice.FieldIdempotencyKey, field.TypeString, value)
 	}
 	if _u.mutation.IdempotencyKeyCleared() {
 		_spec.ClearField(invoice.FieldIdempotencyKey, field.TypeString)
+	}
+	if value, ok := _u.mutation.RecalculatedInvoiceID(); ok {
+		_spec.SetField(invoice.FieldRecalculatedInvoiceID, field.TypeString, value)
+	}
+	if _u.mutation.RecalculatedInvoiceIDCleared() {
+		_spec.ClearField(invoice.FieldRecalculatedInvoiceID, field.TypeString)
 	}
 	if _u.mutation.LineItemsCleared() {
 		edge := &sqlgraph.EdgeSpec{

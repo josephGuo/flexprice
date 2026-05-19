@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flexprice/flexprice/internal/domain/events"
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -92,21 +93,35 @@ func (s *InMemoryFeatureUsageStore) GetDetailedUsageAnalytics(ctx context.Contex
 	return []*events.DetailedUsageAnalytic{}, nil
 }
 
-// GetFeatureUsageBySubscription gets feature usage by subscription
-func (s *InMemoryFeatureUsageStore) GetFeatureUsageBySubscription(ctx context.Context, subscriptionID, externalCustomerID string, startTime, endTime time.Time) (map[string]*events.UsageByFeatureResult, error) {
+// GetFeatureUsageBySubscription gets feature usage by subscription.
+// params.Opts is ignored (in-memory has no FINAL concept).
+func (s *InMemoryFeatureUsageStore) GetFeatureUsageBySubscription(ctx context.Context, params *events.GetFeatureUsageBySubscriptionParams) (map[string]*events.UsageByFeatureResult, error) {
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	result := make(map[string]*events.UsageByFeatureResult)
 	for _, usage := range s.usage {
-		if usage.SubscriptionID == subscriptionID {
-			result[usage.SubLineItemID] = &events.UsageByFeatureResult{
-				SubLineItemID: usage.SubLineItemID,
-				FeatureID:     usage.FeatureID,
-				MeterID:       usage.MeterID,
-				PriceID:       usage.PriceID,
-				SumTotal:      usage.QtyTotal,
-			}
+		if usage.SubscriptionID != params.SubscriptionID {
+			continue
+		}
+		if len(params.CustomerIDs) > 0 && !lo.Contains(params.CustomerIDs, usage.CustomerID) {
+			continue
+		}
+
+		// For count aggregation, subscription service uses CountDistinctIDs.
+		// Use QtyTotal as count when it's a whole number (typical for count meters).
+		countDistinctIDs := uint64(0)
+		if usage.QtyTotal.IsInteger() {
+			countDistinctIDs = uint64(usage.QtyTotal.IntPart())
+		}
+		result[usage.SubLineItemID] = &events.UsageByFeatureResult{
+			SubLineItemID:    usage.SubLineItemID,
+			FeatureID:        usage.FeatureID,
+			MeterID:          usage.MeterID,
+			PriceID:          usage.PriceID,
+			SumTotal:         usage.QtyTotal,
+			CountDistinctIDs: countDistinctIDs,
 		}
 	}
 	return result, nil
@@ -128,7 +143,7 @@ func (s *InMemoryFeatureUsageStore) GetFeatureUsageForExport(ctx context.Context
 	return result, nil
 }
 
-func (s *InMemoryFeatureUsageStore) GetUsageForMaxMetersWithBuckets(ctx context.Context, params *events.FeatureUsageParams) (*events.AggregationResult, error) {
+func (s *InMemoryFeatureUsageStore) GetUsageForBucketedMeters(ctx context.Context, params *events.FeatureUsageParams) (*events.AggregationResult, error) {
 	return &events.AggregationResult{
 		Results: make([]events.UsageResult, 0),
 		Value:   decimal.NewFromInt(0),
@@ -142,4 +157,31 @@ func (s *InMemoryFeatureUsageStore) GetFeatureUsageByEventIDs(ctx context.Contex
 	var result []*events.FeatureUsage
 
 	return result, nil
+}
+
+func (s *InMemoryFeatureUsageStore) DeleteByReprocessScopeBeforeCheckpoint(ctx context.Context, params *events.DeleteFeatureUsageScopeParams) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id, usage := range s.usage {
+		if params.GetEventsParams.ExternalCustomerID != "" && usage.ExternalCustomerID != params.GetEventsParams.ExternalCustomerID {
+			continue
+		}
+		if params.GetEventsParams.EventName != "" && usage.EventName != params.GetEventsParams.EventName {
+			continue
+		}
+		if !params.GetEventsParams.StartTime.IsZero() && usage.Timestamp.Before(params.GetEventsParams.StartTime) {
+			continue
+		}
+		if !params.GetEventsParams.EndTime.IsZero() && usage.Timestamp.After(params.GetEventsParams.EndTime) {
+			continue
+		}
+		if usage.ProcessedAt.IsZero() || !usage.ProcessedAt.Before(params.RunStartTime) {
+			continue
+		}
+
+		delete(s.usage, id)
+	}
+
+	return nil
 }

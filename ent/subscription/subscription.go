@@ -78,6 +78,8 @@ const (
 	FieldBillingCycle = "billing_cycle"
 	// FieldCommitmentAmount holds the string denoting the commitment_amount field in the database.
 	FieldCommitmentAmount = "commitment_amount"
+	// FieldCommitmentDuration holds the string denoting the commitment_duration field in the database.
+	FieldCommitmentDuration = "commitment_duration"
 	// FieldOverageFactor holds the string denoting the overage_factor field in the database.
 	FieldOverageFactor = "overage_factor"
 	// FieldPaymentBehavior holds the string denoting the payment_behavior field in the database.
@@ -94,12 +96,24 @@ const (
 	FieldEnableTrueUp = "enable_true_up"
 	// FieldInvoicingCustomerID holds the string denoting the invoicing_customer_id field in the database.
 	FieldInvoicingCustomerID = "invoicing_customer_id"
+	// FieldParentSubscriptionID holds the string denoting the parent_subscription_id field in the database.
+	FieldParentSubscriptionID = "parent_subscription_id"
+	// FieldPaymentTerms holds the string denoting the payment_terms field in the database.
+	FieldPaymentTerms = "payment_terms"
+	// FieldSubscriptionType holds the string denoting the subscription_type field in the database.
+	FieldSubscriptionType = "subscription_type"
+	// FieldAutoInvoiceThreshold holds the string denoting the auto_invoice_threshold field in the database.
+	FieldAutoInvoiceThreshold = "auto_invoice_threshold"
+	// FieldSyncedPriceSequence holds the string denoting the synced_price_sequence field in the database.
+	FieldSyncedPriceSequence = "synced_price_sequence"
 	// EdgeLineItems holds the string denoting the line_items edge name in mutations.
 	EdgeLineItems = "line_items"
 	// EdgePauses holds the string denoting the pauses edge name in mutations.
 	EdgePauses = "pauses"
 	// EdgePhases holds the string denoting the phases edge name in mutations.
 	EdgePhases = "phases"
+	// EdgeSchedules holds the string denoting the schedules edge name in mutations.
+	EdgeSchedules = "schedules"
 	// EdgeCreditGrants holds the string denoting the credit_grants edge name in mutations.
 	EdgeCreditGrants = "credit_grants"
 	// EdgeCouponAssociations holds the string denoting the coupon_associations edge name in mutations.
@@ -131,6 +145,13 @@ const (
 	PhasesInverseTable = "subscription_phases"
 	// PhasesColumn is the table column denoting the phases relation/edge.
 	PhasesColumn = "subscription_id"
+	// SchedulesTable is the table that holds the schedules relation/edge.
+	SchedulesTable = "subscription_schedules"
+	// SchedulesInverseTable is the table name for the SubscriptionSchedule entity.
+	// It exists in this package in order to avoid circular dependency with the "subscriptionschedule" package.
+	SchedulesInverseTable = "subscription_schedules"
+	// SchedulesColumn is the table column denoting the schedules relation/edge.
+	SchedulesColumn = "subscription_id"
 	// CreditGrantsTable is the table that holds the credit_grants relation/edge.
 	CreditGrantsTable = "credit_grants"
 	// CreditGrantsInverseTable is the table name for the CreditGrant entity.
@@ -195,6 +216,7 @@ var Columns = []string{
 	FieldActivePauseID,
 	FieldBillingCycle,
 	FieldCommitmentAmount,
+	FieldCommitmentDuration,
 	FieldOverageFactor,
 	FieldPaymentBehavior,
 	FieldCollectionMethod,
@@ -203,6 +225,11 @@ var Columns = []string{
 	FieldProrationBehavior,
 	FieldEnableTrueUp,
 	FieldInvoicingCustomerID,
+	FieldParentSubscriptionID,
+	FieldPaymentTerms,
+	FieldSubscriptionType,
+	FieldAutoInvoiceThreshold,
+	FieldSyncedPriceSequence,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -274,6 +301,10 @@ var (
 	ProrationBehaviorValidator func(string) error
 	// DefaultEnableTrueUp holds the default value on creation for the "enable_true_up" field.
 	DefaultEnableTrueUp bool
+	// DefaultSubscriptionType holds the default value on creation for the "subscription_type" field.
+	DefaultSubscriptionType types.SubscriptionType
+	// DefaultSyncedPriceSequence holds the default value on creation for the "synced_price_sequence" field.
+	DefaultSyncedPriceSequence int64
 )
 
 // OrderOption defines the ordering options for the Subscription queries.
@@ -434,6 +465,11 @@ func ByCommitmentAmount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCommitmentAmount, opts...).ToFunc()
 }
 
+// ByCommitmentDuration orders the results by the commitment_duration field.
+func ByCommitmentDuration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCommitmentDuration, opts...).ToFunc()
+}
+
 // ByOverageFactor orders the results by the overage_factor field.
 func ByOverageFactor(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOverageFactor, opts...).ToFunc()
@@ -472,6 +508,31 @@ func ByEnableTrueUp(opts ...sql.OrderTermOption) OrderOption {
 // ByInvoicingCustomerID orders the results by the invoicing_customer_id field.
 func ByInvoicingCustomerID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldInvoicingCustomerID, opts...).ToFunc()
+}
+
+// ByParentSubscriptionID orders the results by the parent_subscription_id field.
+func ByParentSubscriptionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldParentSubscriptionID, opts...).ToFunc()
+}
+
+// ByPaymentTerms orders the results by the payment_terms field.
+func ByPaymentTerms(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPaymentTerms, opts...).ToFunc()
+}
+
+// BySubscriptionType orders the results by the subscription_type field.
+func BySubscriptionType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSubscriptionType, opts...).ToFunc()
+}
+
+// ByAutoInvoiceThreshold orders the results by the auto_invoice_threshold field.
+func ByAutoInvoiceThreshold(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAutoInvoiceThreshold, opts...).ToFunc()
+}
+
+// BySyncedPriceSequence orders the results by the synced_price_sequence field.
+func BySyncedPriceSequence(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSyncedPriceSequence, opts...).ToFunc()
 }
 
 // ByLineItemsCount orders the results by line_items count.
@@ -513,6 +574,20 @@ func ByPhasesCount(opts ...sql.OrderTermOption) OrderOption {
 func ByPhases(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newPhasesStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
+// BySchedulesCount orders the results by schedules count.
+func BySchedulesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newSchedulesStep(), opts...)
+	}
+}
+
+// BySchedules orders the results by schedules terms.
+func BySchedules(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newSchedulesStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
 
@@ -583,6 +658,13 @@ func newPhasesStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(PhasesInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, PhasesTable, PhasesColumn),
+	)
+}
+func newSchedulesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(SchedulesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, SchedulesTable, SchedulesColumn),
 	)
 }
 func newCreditGrantsStep() *sqlgraph.Step {

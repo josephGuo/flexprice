@@ -60,16 +60,18 @@ const (
 	FieldCurrency = "currency"
 	// FieldBillingPeriod holds the string denoting the billing_period field in the database.
 	FieldBillingPeriod = "billing_period"
+	// FieldBillingPeriodCount holds the string denoting the billing_period_count field in the database.
+	FieldBillingPeriodCount = "billing_period_count"
 	// FieldInvoiceCadence holds the string denoting the invoice_cadence field in the database.
 	FieldInvoiceCadence = "invoice_cadence"
-	// FieldTrialPeriod holds the string denoting the trial_period field in the database.
-	FieldTrialPeriod = "trial_period"
 	// FieldStartDate holds the string denoting the start_date field in the database.
 	FieldStartDate = "start_date"
 	// FieldEndDate holds the string denoting the end_date field in the database.
 	FieldEndDate = "end_date"
 	// FieldSubscriptionPhaseID holds the string denoting the subscription_phase_id field in the database.
 	FieldSubscriptionPhaseID = "subscription_phase_id"
+	// FieldAddonAssociationID holds the string denoting the addon_association_id field in the database.
+	FieldAddonAssociationID = "addon_association_id"
 	// FieldMetadata holds the string denoting the metadata field in the database.
 	FieldMetadata = "metadata"
 	// FieldCommitmentAmount holds the string denoting the commitment_amount field in the database.
@@ -84,6 +86,8 @@ const (
 	FieldCommitmentTrueUpEnabled = "commitment_true_up_enabled"
 	// FieldCommitmentWindowed holds the string denoting the commitment_windowed field in the database.
 	FieldCommitmentWindowed = "commitment_windowed"
+	// FieldCommitmentDuration holds the string denoting the commitment_duration field in the database.
+	FieldCommitmentDuration = "commitment_duration"
 	// EdgeSubscription holds the string denoting the subscription edge name in mutations.
 	EdgeSubscription = "subscription"
 	// EdgeCouponAssociations holds the string denoting the coupon_associations edge name in mutations.
@@ -131,11 +135,12 @@ var Columns = []string{
 	FieldQuantity,
 	FieldCurrency,
 	FieldBillingPeriod,
+	FieldBillingPeriodCount,
 	FieldInvoiceCadence,
-	FieldTrialPeriod,
 	FieldStartDate,
 	FieldEndDate,
 	FieldSubscriptionPhaseID,
+	FieldAddonAssociationID,
 	FieldMetadata,
 	FieldCommitmentAmount,
 	FieldCommitmentQuantity,
@@ -143,6 +148,7 @@ var Columns = []string{
 	FieldCommitmentOverageFactor,
 	FieldCommitmentTrueUpEnabled,
 	FieldCommitmentWindowed,
+	FieldCommitmentDuration,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -182,8 +188,8 @@ var (
 	CurrencyValidator func(string) error
 	// BillingPeriodValidator is a validator for the "billing_period" field. It is called by the builders before save.
 	BillingPeriodValidator func(string) error
-	// DefaultTrialPeriod holds the default value on creation for the "trial_period" field.
-	DefaultTrialPeriod int
+	// DefaultBillingPeriodCount holds the default value on creation for the "billing_period_count" field.
+	DefaultBillingPeriodCount int
 	// DefaultCommitmentTrueUpEnabled holds the default value on creation for the "commitment_true_up_enabled" field.
 	DefaultCommitmentTrueUpEnabled bool
 	// DefaultCommitmentWindowed holds the default value on creation for the "commitment_windowed" field.
@@ -308,14 +314,14 @@ func ByBillingPeriod(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBillingPeriod, opts...).ToFunc()
 }
 
+// ByBillingPeriodCount orders the results by the billing_period_count field.
+func ByBillingPeriodCount(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingPeriodCount, opts...).ToFunc()
+}
+
 // ByInvoiceCadence orders the results by the invoice_cadence field.
 func ByInvoiceCadence(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldInvoiceCadence, opts...).ToFunc()
-}
-
-// ByTrialPeriod orders the results by the trial_period field.
-func ByTrialPeriod(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldTrialPeriod, opts...).ToFunc()
 }
 
 // ByStartDate orders the results by the start_date field.
@@ -331,6 +337,11 @@ func ByEndDate(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionPhaseID orders the results by the subscription_phase_id field.
 func BySubscriptionPhaseID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionPhaseID, opts...).ToFunc()
+}
+
+// ByAddonAssociationID orders the results by the addon_association_id field.
+func ByAddonAssociationID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAddonAssociationID, opts...).ToFunc()
 }
 
 // ByCommitmentAmount orders the results by the commitment_amount field.
@@ -361,6 +372,11 @@ func ByCommitmentTrueUpEnabled(opts ...sql.OrderTermOption) OrderOption {
 // ByCommitmentWindowed orders the results by the commitment_windowed field.
 func ByCommitmentWindowed(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldCommitmentWindowed, opts...).ToFunc()
+}
+
+// ByCommitmentDuration orders the results by the commitment_duration field.
+func ByCommitmentDuration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCommitmentDuration, opts...).ToFunc()
 }
 
 // BySubscriptionField orders the results by subscription field.

@@ -83,6 +83,8 @@ type Subscription struct {
 	BillingCycle types.BillingCycle `json:"billing_cycle,omitempty"`
 	// CommitmentAmount holds the value of the "commitment_amount" field.
 	CommitmentAmount *decimal.Decimal `json:"commitment_amount,omitempty"`
+	// CommitmentDuration holds the value of the "commitment_duration" field.
+	CommitmentDuration *types.BillingPeriod `json:"commitment_duration,omitempty"`
 	// OverageFactor holds the value of the "overage_factor" field.
 	OverageFactor *decimal.Decimal `json:"overage_factor,omitempty"`
 	// Determines how subscription payments are handled
@@ -99,6 +101,16 @@ type Subscription struct {
 	EnableTrueUp bool `json:"enable_true_up,omitempty"`
 	// Customer ID to use for invoicing (can differ from the subscription customer)
 	InvoicingCustomerID *string `json:"invoicing_customer_id,omitempty"`
+	// Parent subscription ID for hierarchy (e.g. child subscription under a parent)
+	ParentSubscriptionID *string `json:"parent_subscription_id,omitempty"`
+	// Payment terms for invoice due date (e.g. 15 NET, 30 NET, 45 NET, 60 NET, 75 NET, 90 NET)
+	PaymentTerms *types.PaymentTerms `json:"payment_terms,omitempty"`
+	// Subscription type within a customer hierarchy (standalone, parent, inherited)
+	SubscriptionType types.SubscriptionType `json:"subscription_type,omitempty"`
+	// Threshold usage amount (in subscription currency) that triggers an intermediate invoice. Overrides plan-level threshold when set.
+	AutoInvoiceThreshold *decimal.Decimal `json:"auto_invoice_threshold,omitempty"`
+	// SyncedPriceSequence holds the value of the "synced_price_sequence" field.
+	SyncedPriceSequence int64 `json:"synced_price_sequence,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SubscriptionQuery when eager-loading is set.
 	Edges        SubscriptionEdges `json:"edges"`
@@ -113,6 +125,8 @@ type SubscriptionEdges struct {
 	Pauses []*SubscriptionPause `json:"pauses,omitempty"`
 	// Phases holds the value of the phases edge.
 	Phases []*SubscriptionPhase `json:"phases,omitempty"`
+	// Subscription can have multiple schedules for plan changes, addons, etc.
+	Schedules []*SubscriptionSchedule `json:"schedules,omitempty"`
 	// CreditGrants holds the value of the credit_grants edge.
 	CreditGrants []*CreditGrant `json:"credit_grants,omitempty"`
 	// Subscription can have multiple coupon associations
@@ -123,7 +137,7 @@ type SubscriptionEdges struct {
 	InvoicingCustomer *Customer `json:"invoicing_customer,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [7]bool
+	loadedTypes [8]bool
 }
 
 // LineItemsOrErr returns the LineItems value or an error if the edge
@@ -153,10 +167,19 @@ func (e SubscriptionEdges) PhasesOrErr() ([]*SubscriptionPhase, error) {
 	return nil, &NotLoadedError{edge: "phases"}
 }
 
+// SchedulesOrErr returns the Schedules value or an error if the edge
+// was not loaded in eager-loading.
+func (e SubscriptionEdges) SchedulesOrErr() ([]*SubscriptionSchedule, error) {
+	if e.loadedTypes[3] {
+		return e.Schedules, nil
+	}
+	return nil, &NotLoadedError{edge: "schedules"}
+}
+
 // CreditGrantsOrErr returns the CreditGrants value or an error if the edge
 // was not loaded in eager-loading.
 func (e SubscriptionEdges) CreditGrantsOrErr() ([]*CreditGrant, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[4] {
 		return e.CreditGrants, nil
 	}
 	return nil, &NotLoadedError{edge: "credit_grants"}
@@ -165,7 +188,7 @@ func (e SubscriptionEdges) CreditGrantsOrErr() ([]*CreditGrant, error) {
 // CouponAssociationsOrErr returns the CouponAssociations value or an error if the edge
 // was not loaded in eager-loading.
 func (e SubscriptionEdges) CouponAssociationsOrErr() ([]*CouponAssociation, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[5] {
 		return e.CouponAssociations, nil
 	}
 	return nil, &NotLoadedError{edge: "coupon_associations"}
@@ -174,7 +197,7 @@ func (e SubscriptionEdges) CouponAssociationsOrErr() ([]*CouponAssociation, erro
 // CouponApplicationsOrErr returns the CouponApplications value or an error if the edge
 // was not loaded in eager-loading.
 func (e SubscriptionEdges) CouponApplicationsOrErr() ([]*CouponApplication, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[6] {
 		return e.CouponApplications, nil
 	}
 	return nil, &NotLoadedError{edge: "coupon_applications"}
@@ -185,7 +208,7 @@ func (e SubscriptionEdges) CouponApplicationsOrErr() ([]*CouponApplication, erro
 func (e SubscriptionEdges) InvoicingCustomerOrErr() (*Customer, error) {
 	if e.InvoicingCustomer != nil {
 		return e.InvoicingCustomer, nil
-	} else if e.loadedTypes[6] {
+	} else if e.loadedTypes[7] {
 		return nil, &NotFoundError{label: customer.Label}
 	}
 	return nil, &NotLoadedError{edge: "invoicing_customer"}
@@ -196,15 +219,15 @@ func (*Subscription) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case subscription.FieldCommitmentAmount, subscription.FieldOverageFactor:
+		case subscription.FieldCommitmentAmount, subscription.FieldOverageFactor, subscription.FieldAutoInvoiceThreshold:
 			values[i] = &sql.NullScanner{S: new(decimal.Decimal)}
 		case subscription.FieldMetadata:
 			values[i] = new([]byte)
 		case subscription.FieldCancelAtPeriodEnd, subscription.FieldEnableTrueUp:
 			values[i] = new(sql.NullBool)
-		case subscription.FieldBillingPeriodCount, subscription.FieldVersion:
+		case subscription.FieldBillingPeriodCount, subscription.FieldVersion, subscription.FieldSyncedPriceSequence:
 			values[i] = new(sql.NullInt64)
-		case subscription.FieldID, subscription.FieldTenantID, subscription.FieldStatus, subscription.FieldCreatedBy, subscription.FieldUpdatedBy, subscription.FieldEnvironmentID, subscription.FieldLookupKey, subscription.FieldCustomerID, subscription.FieldPlanID, subscription.FieldSubscriptionStatus, subscription.FieldCurrency, subscription.FieldBillingCadence, subscription.FieldBillingPeriod, subscription.FieldPauseStatus, subscription.FieldActivePauseID, subscription.FieldBillingCycle, subscription.FieldPaymentBehavior, subscription.FieldCollectionMethod, subscription.FieldGatewayPaymentMethodID, subscription.FieldCustomerTimezone, subscription.FieldProrationBehavior, subscription.FieldInvoicingCustomerID:
+		case subscription.FieldID, subscription.FieldTenantID, subscription.FieldStatus, subscription.FieldCreatedBy, subscription.FieldUpdatedBy, subscription.FieldEnvironmentID, subscription.FieldLookupKey, subscription.FieldCustomerID, subscription.FieldPlanID, subscription.FieldSubscriptionStatus, subscription.FieldCurrency, subscription.FieldBillingCadence, subscription.FieldBillingPeriod, subscription.FieldPauseStatus, subscription.FieldActivePauseID, subscription.FieldBillingCycle, subscription.FieldCommitmentDuration, subscription.FieldPaymentBehavior, subscription.FieldCollectionMethod, subscription.FieldGatewayPaymentMethodID, subscription.FieldCustomerTimezone, subscription.FieldProrationBehavior, subscription.FieldInvoicingCustomerID, subscription.FieldParentSubscriptionID, subscription.FieldPaymentTerms, subscription.FieldSubscriptionType:
 			values[i] = new(sql.NullString)
 		case subscription.FieldCreatedAt, subscription.FieldUpdatedAt, subscription.FieldBillingAnchor, subscription.FieldStartDate, subscription.FieldEndDate, subscription.FieldCurrentPeriodStart, subscription.FieldCurrentPeriodEnd, subscription.FieldCancelledAt, subscription.FieldCancelAt, subscription.FieldTrialStart, subscription.FieldTrialEnd:
 			values[i] = new(sql.NullTime)
@@ -424,6 +447,13 @@ func (_m *Subscription) assignValues(columns []string, values []any) error {
 				_m.CommitmentAmount = new(decimal.Decimal)
 				*_m.CommitmentAmount = *value.S.(*decimal.Decimal)
 			}
+		case subscription.FieldCommitmentDuration:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field commitment_duration", values[i])
+			} else if value.Valid {
+				_m.CommitmentDuration = new(types.BillingPeriod)
+				*_m.CommitmentDuration = types.BillingPeriod(value.String)
+			}
 		case subscription.FieldOverageFactor:
 			if value, ok := values[i].(*sql.NullScanner); !ok {
 				return fmt.Errorf("unexpected type %T for field overage_factor", values[i])
@@ -474,6 +504,39 @@ func (_m *Subscription) assignValues(columns []string, values []any) error {
 				_m.InvoicingCustomerID = new(string)
 				*_m.InvoicingCustomerID = value.String
 			}
+		case subscription.FieldParentSubscriptionID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field parent_subscription_id", values[i])
+			} else if value.Valid {
+				_m.ParentSubscriptionID = new(string)
+				*_m.ParentSubscriptionID = value.String
+			}
+		case subscription.FieldPaymentTerms:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field payment_terms", values[i])
+			} else if value.Valid {
+				_m.PaymentTerms = new(types.PaymentTerms)
+				*_m.PaymentTerms = types.PaymentTerms(value.String)
+			}
+		case subscription.FieldSubscriptionType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_type", values[i])
+			} else if value.Valid {
+				_m.SubscriptionType = types.SubscriptionType(value.String)
+			}
+		case subscription.FieldAutoInvoiceThreshold:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field auto_invoice_threshold", values[i])
+			} else if value.Valid {
+				_m.AutoInvoiceThreshold = new(decimal.Decimal)
+				*_m.AutoInvoiceThreshold = *value.S.(*decimal.Decimal)
+			}
+		case subscription.FieldSyncedPriceSequence:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field synced_price_sequence", values[i])
+			} else if value.Valid {
+				_m.SyncedPriceSequence = value.Int64
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -500,6 +563,11 @@ func (_m *Subscription) QueryPauses() *SubscriptionPauseQuery {
 // QueryPhases queries the "phases" edge of the Subscription entity.
 func (_m *Subscription) QueryPhases() *SubscriptionPhaseQuery {
 	return NewSubscriptionClient(_m.config).QueryPhases(_m)
+}
+
+// QuerySchedules queries the "schedules" edge of the Subscription entity.
+func (s *Subscription) QuerySchedules() *SubscriptionScheduleQuery {
+	return NewSubscriptionClient(s.config).QuerySchedules(s)
 }
 
 // QueryCreditGrants queries the "credit_grants" edge of the Subscription entity.
@@ -652,6 +720,11 @@ func (_m *Subscription) String() string {
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")
+	if v := _m.CommitmentDuration; v != nil {
+		builder.WriteString("commitment_duration=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
 	if v := _m.OverageFactor; v != nil {
 		builder.WriteString("overage_factor=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
@@ -679,6 +752,27 @@ func (_m *Subscription) String() string {
 		builder.WriteString("invoicing_customer_id=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	if v := _m.ParentSubscriptionID; v != nil {
+		builder.WriteString("parent_subscription_id=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.PaymentTerms; v != nil {
+		builder.WriteString("payment_terms=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("subscription_type=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SubscriptionType))
+	builder.WriteString(", ")
+	if v := _m.AutoInvoiceThreshold; v != nil {
+		builder.WriteString("auto_invoice_threshold=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("synced_price_sequence=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SyncedPriceSequence))
 	builder.WriteByte(')')
 	return builder.String()
 }

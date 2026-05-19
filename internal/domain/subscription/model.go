@@ -95,6 +95,9 @@ type Subscription struct {
 	// CommitmentAmount is the minimum amount a customer commits to paying for a billing period
 	CommitmentAmount *decimal.Decimal `db:"commitment_amount" json:"commitment_amount,omitempty" swaggertype:"string"`
 
+	// CommitmentDuration is the time frame of the commitment (e.g., ANNUAL commitment on a MONTHLY subscription)
+	CommitmentDuration *types.BillingPeriod `db:"commitment_duration" json:"commitment_duration,omitempty"`
+
 	// OverageFactor is a multiplier applied to usage beyond the commitment amount
 	OverageFactor *decimal.Decimal `db:"overage_factor" json:"overage_factor,omitempty" swaggertype:"string"`
 
@@ -124,6 +127,25 @@ type Subscription struct {
 	// This can differ from the subscription customer (e.g., parent company invoicing for child company)
 	InvoicingCustomerID *string `db:"invoicing_customer_id" json:"invoicing_customer_id,omitempty"`
 
+	// ParentSubscriptionID is the parent subscription ID for hierarchy (e.g. child subscription under a parent)
+	ParentSubscriptionID *string `db:"parent_subscription_id" json:"parent_subscription_id,omitempty"`
+
+	// PaymentTerms (e.g. 15 NET, 30 NET) used to compute invoice due date from period end
+	PaymentTerms *types.PaymentTerms `db:"payment_terms" json:"payment_terms,omitempty"`
+
+	// SubscriptionType categorises the subscription within a customer hierarchy (standalone, parent, inherited).
+	SubscriptionType types.SubscriptionType `db:"subscription_type" json:"subscription_type"`
+
+	// AutoInvoiceThreshold is the usage amount (in subscription currency) that triggers
+	// an intermediate invoice. Overrides the plan-level threshold when set.
+	// Nil means: inherit from the plan's threshold (which may also be nil = disabled).
+	AutoInvoiceThreshold *decimal.Decimal `db:"auto_invoice_threshold" json:"auto_invoice_threshold,omitempty" swaggertype:"string"`
+
+	// SyncedPriceSequence is the plan-price sequence up to which this
+	// subscription's line items have been reconciled. Bumped by the
+	// plan-price sync after a successful pass.
+	SyncedPriceSequence int64 `db:"synced_price_sequence" json:"synced_price_sequence,omitempty"`
+
 	types.BaseModel
 }
 
@@ -134,6 +156,41 @@ func (s *Subscription) GetInvoicingCustomerID() string {
 		return *s.InvoicingCustomerID
 	}
 	return s.CustomerID
+}
+
+// HasMixedBillingPeriods returns true when the subscription's line items have more
+// than one distinct BillingPeriod. Safe to call with nil/empty LineItems (returns false).
+func (s *Subscription) HasMixedBillingPeriods() bool {
+	return hasMixedBillingPeriods(s.LineItems)
+}
+
+// hasMixedBillingPeriods is a standalone helper usable before the subscription is persisted.
+func hasMixedBillingPeriods(items []*SubscriptionLineItem) bool {
+	if len(items) <= 1 {
+		return false
+	}
+	first := items[0].BillingPeriod
+	for _, item := range items[1:] {
+		if item.BillingPeriod != first {
+			return true
+		}
+	}
+	return false
+}
+
+// HasCommitment returns true if the subscription has subscription-level commitment configured
+// (commitment amount and overage factor both set and greater than zero/one).
+func (s *Subscription) HasCommitment() bool {
+	return s.CommitmentAmount != nil &&
+		s.CommitmentAmount.GreaterThan(decimal.Zero) &&
+		s.OverageFactor != nil &&
+		s.OverageFactor.GreaterThan(decimal.NewFromInt(1))
+}
+
+// HasPositiveAutoInvoiceThreshold reports whether subscription-level mid-period
+// auto invoice threshold billing is configured (> 0). Matches cron/repo eligibility.
+func (s *Subscription) HasPositiveAutoInvoiceThreshold() bool {
+	return s.AutoInvoiceThreshold != nil && s.AutoInvoiceThreshold.GreaterThan(decimal.Zero)
 }
 
 func FromEntList(subs []*ent.Subscription) []*Subscription {
@@ -193,19 +250,25 @@ func GetSubscriptionFromEnt(sub *ent.Subscription) *Subscription {
 		PauseStatus:            types.PauseStatus(sub.PauseStatus),
 		ActivePauseID:          sub.ActivePauseID,
 		CommitmentAmount:       sub.CommitmentAmount,
+		CommitmentDuration:     sub.CommitmentDuration,
 		OverageFactor:          sub.OverageFactor,
 		PaymentBehavior:        string(sub.PaymentBehavior),
 		CollectionMethod:       string(sub.CollectionMethod),
 		GatewayPaymentMethodID: lo.ToPtr(sub.GatewayPaymentMethodID),
 
-		LineItems:           lineItems,
-		CouponAssociations:  couponAssociations,
-		Pauses:              pauses,
-		Phases:              phases,
-		CustomerTimezone:    sub.CustomerTimezone,
-		ProrationBehavior:   types.ProrationBehavior(sub.ProrationBehavior),
-		EnableTrueUp:        sub.EnableTrueUp,
-		InvoicingCustomerID: sub.InvoicingCustomerID,
+		LineItems:            lineItems,
+		CouponAssociations:   couponAssociations,
+		Pauses:               pauses,
+		Phases:               phases,
+		CustomerTimezone:     sub.CustomerTimezone,
+		ProrationBehavior:    types.ProrationBehavior(sub.ProrationBehavior),
+		EnableTrueUp:         sub.EnableTrueUp,
+		InvoicingCustomerID:  sub.InvoicingCustomerID,
+		ParentSubscriptionID: sub.ParentSubscriptionID,
+		PaymentTerms:         sub.PaymentTerms,
+		SubscriptionType:     types.SubscriptionType(sub.SubscriptionType),
+		AutoInvoiceThreshold: sub.AutoInvoiceThreshold,
+		SyncedPriceSequence:  sub.SyncedPriceSequence,
 		BaseModel: types.BaseModel{
 			TenantID:  sub.TenantID,
 			Status:    types.Status(sub.Status),

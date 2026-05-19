@@ -30,12 +30,15 @@ type SecretProvider string
 const (
 	SecretProviderFlexPrice  SecretProvider = "flexprice"
 	SecretProviderStripe     SecretProvider = "stripe"
-	SecretProviderS3         SecretProvider = "s3"
+	SecretProviderS3         SecretProvider = "s3" // supports multiple connections per environment
 	SecretProviderHubSpot    SecretProvider = "hubspot"
 	SecretProviderRazorpay   SecretProvider = "razorpay"
 	SecretProviderChargebee  SecretProvider = "chargebee"
 	SecretProviderQuickBooks SecretProvider = "quickbooks"
+	SecretProviderZohoBooks  SecretProvider = "zoho_books"
 	SecretProviderNomod      SecretProvider = "nomod"
+	SecretProviderMoyasar    SecretProvider = "moyasar"
+	SecretProviderPaddle     SecretProvider = "paddle"
 )
 
 func (p SecretProvider) Validate() error {
@@ -47,7 +50,10 @@ func (p SecretProvider) Validate() error {
 		SecretProviderRazorpay,
 		SecretProviderChargebee,
 		SecretProviderQuickBooks,
+		SecretProviderZohoBooks,
 		SecretProviderNomod,
+		SecretProviderMoyasar,
+		SecretProviderPaddle,
 	}
 	if !lo.Contains(allowedSecretProviders, p) {
 		return ierr.NewError("invalid secret provider").

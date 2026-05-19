@@ -43,6 +43,7 @@ import (
 
 	"github.com/flexprice/flexprice/internal/domain/events"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
 
@@ -70,6 +71,40 @@ func GetAggregator(aggregationType types.AggregationType) events.Aggregator {
 
 func getDeduplicationKey() string {
 	return "id"
+}
+
+// buildUsageEventCustomerFilters returns PREWHERE fragments for external_customer_id and FlexPrice customer_id.
+// Params may be nil. External merges ExternalCustomerID and ExternalCustomerIDs (deduped); internal uses CustomerID only.
+func buildUsageEventCustomerFilters(params *events.UsageParams) (externalCustomerFilter string, customerFilter string) {
+	if params == nil {
+		return "", ""
+	}
+
+	extIDs := make([]string, 0)
+	if params.ExternalCustomerID != "" {
+		extIDs = append(extIDs, params.ExternalCustomerID)
+	}
+	if len(params.ExternalCustomerIDs) > 0 {
+		extIDs = append(extIDs, params.ExternalCustomerIDs...)
+	}
+	extUnique := lo.Uniq(extIDs)
+	switch len(extUnique) {
+	case 0:
+		externalCustomerFilter = ""
+	case 1:
+		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", extUnique[0])
+	default:
+		quoted := make([]string, len(extUnique))
+		for i, id := range extUnique {
+			quoted[i] = fmt.Sprintf("'%s'", id)
+		}
+		externalCustomerFilter = fmt.Sprintf("AND external_customer_id IN (%s)", strings.Join(quoted, ", "))
+	}
+
+	if params.CustomerID != "" {
+		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
+	}
+	return externalCustomerFilter, customerFilter
 }
 
 func formatClickHouseDateTime(t time.Time) string {
@@ -227,15 +262,7 @@ func (a *SumAggregator) getNonWindowedQuery(ctx context.Context, params *events.
 		windowGroupBy = ", window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -276,15 +303,7 @@ func (a *SumAggregator) getNonWindowedQuery(ctx context.Context, params *events.
 func (a *SumAggregator) getWindowedQuery(ctx context.Context, params *events.UsageParams) string {
 	bucketWindow := formatWindowSizeWithBillingAnchor(params.BucketSize, params.BillingAnchor)
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -295,7 +314,7 @@ func (a *SumAggregator) getWindowedQuery(ctx context.Context, params *events.Usa
 			SELECT
 				%s as bucket_start,
 				sum(JSONExtractFloat(assumeNotNull(properties), '%s')) as bucket_sum
-			FROM events
+			FROM events FINAL
 			PREWHERE tenant_id = '%s'
 				AND environment_id = '%s'
 				AND event_name = '%s'
@@ -341,15 +360,7 @@ func (a *CountAggregator) GetQuery(ctx context.Context, params *events.UsagePara
 		groupByClause = "GROUP BY window_size ORDER BY window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -400,15 +411,7 @@ func (a *CountUniqueAggregator) GetQuery(ctx context.Context, params *events.Usa
 		windowGroupBy = ", window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -467,15 +470,7 @@ func (a *AvgAggregator) GetQuery(ctx context.Context, params *events.UsageParams
 		windowGroupBy = ", window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -530,15 +525,7 @@ func (a *LatestAggregator) GetQuery(ctx context.Context, params *events.UsagePar
 		groupByClause = "GROUP BY window_size ORDER BY window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -547,7 +534,8 @@ func (a *LatestAggregator) GetQuery(ctx context.Context, params *events.UsagePar
         SELECT 
             %s argMax(JSONExtractFloat(assumeNotNull(properties), '%s'), timestamp) as total
         FROM 
-			events	PREWHERE tenant_id = '%s'
+			events
+			PREWHERE tenant_id = '%s'
                 AND environment_id = '%s'
                 AND event_name = '%s'
                 %s
@@ -589,15 +577,7 @@ func (a *SumWithMultiAggregator) GetQuery(ctx context.Context, params *events.Us
 		windowGroupBy = ", window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -609,7 +589,7 @@ func (a *SumWithMultiAggregator) GetQuery(ctx context.Context, params *events.Us
 
 	return fmt.Sprintf(`
         SELECT 
-            %s (sum(value) * %f) as total
+            %s (sum(value) * %s) as total
         FROM (
             SELECT
                 %s anyLast(JSONExtractFloat(assumeNotNull(properties), '%s')) as value
@@ -626,7 +606,7 @@ func (a *SumWithMultiAggregator) GetQuery(ctx context.Context, params *events.Us
         %s
     `,
 		selectClause,
-		multiplier.InexactFloat64(),
+		multiplier.String(),
 		windowClause,
 		params.PropertyName,
 		types.GetTenantID(ctx),
@@ -671,15 +651,7 @@ func (a *MaxAggregator) getNonWindowedQuery(ctx context.Context, params *events.
 		windowGroupBy = ", window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
@@ -720,26 +692,60 @@ func (a *MaxAggregator) getNonWindowedQuery(ctx context.Context, params *events.
 func (a *MaxAggregator) getWindowedQuery(ctx context.Context, params *events.UsageParams) string {
 	bucketWindow := formatWindowSizeWithBillingAnchor(params.BucketSize, params.BillingAnchor)
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)
 
-	// First get max values per bucket, then get the max across all buckets
+	// When GroupByProperty is set, return per-group rows so tiered pricing can be applied per group (e.g. per KRN).
+	// 1. per_group CTE: max per group per bucket (e.g., MAX per krn per hour)
+	// 2. Return each group's value with group_key; total is sum of all group values for backward compat
+	if params.GroupByProperty != "" && validateGroupByProperty(params.GroupByProperty) == nil {
+		groupByExpr := fmt.Sprintf("JSONExtractString(assumeNotNull(properties), '%s')", params.GroupByProperty)
+
+		return fmt.Sprintf(`
+			WITH per_group AS (
+				SELECT
+					%s as bucket_start,
+					%s as group_key,
+					max(JSONExtractFloat(assumeNotNull(properties), '%s')) as group_value
+				FROM events FINAL
+				PREWHERE tenant_id = '%s'
+					AND environment_id = '%s'
+					AND event_name = '%s'
+					%s
+					%s
+					%s
+					%s
+				GROUP BY bucket_start, group_key
+			)
+			SELECT
+				(SELECT sum(group_value) FROM per_group) as total,
+				bucket_start as timestamp,
+				group_value as value,
+				group_key
+			FROM per_group
+			ORDER BY bucket_start, group_key
+		`,
+			bucketWindow,
+			groupByExpr,
+			params.PropertyName,
+			types.GetTenantID(ctx),
+			types.GetEnvironmentID(ctx),
+			params.EventName,
+			externalCustomerFilter,
+			customerFilter,
+			filterConditions,
+			timeConditions)
+	}
+
+	// First get max values per bucket, then sum across all buckets
 	return fmt.Sprintf(`
 		WITH bucket_maxes AS (
 			SELECT
 				%s as bucket_start,
 				max(JSONExtractFloat(assumeNotNull(properties), '%s')) as bucket_max
-			FROM events
+			FROM events FINAL
 			PREWHERE tenant_id = '%s'
 				AND environment_id = '%s'
 				AND event_name = '%s'
@@ -787,15 +793,7 @@ func (a *WeightedSumAggregator) GetQuery(ctx context.Context, params *events.Usa
 		groupByClause = "GROUP BY window_size ORDER BY window_size"
 	}
 
-	externalCustomerFilter := ""
-	if params.ExternalCustomerID != "" {
-		externalCustomerFilter = fmt.Sprintf("AND external_customer_id = '%s'", params.ExternalCustomerID)
-	}
-
-	customerFilter := ""
-	if params.CustomerID != "" {
-		customerFilter = fmt.Sprintf("AND customer_id = '%s'", params.CustomerID)
-	}
+	externalCustomerFilter, customerFilter := buildUsageEventCustomerFilters(params)
 
 	filterConditions := buildFilterConditions(params.Filters)
 	timeConditions := buildTimeConditions(params)

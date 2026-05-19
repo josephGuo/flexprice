@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
@@ -34,31 +33,6 @@ func (s *customerService) CreateCustomer(ctx context.Context, req dto.CreateCust
 		return nil, err
 	}
 
-	// Resolve and validate parent customer if provided (by ID or external ID)
-	if req.ParentCustomerExternalID != nil {
-		parent, err := s.CustomerRepo.GetByLookupKey(ctx, *req.ParentCustomerExternalID)
-		if err != nil {
-			return nil, err
-		}
-		if parent.ParentCustomerID != nil {
-			return nil, ierr.NewError("parent customer cannot be a child").
-				WithHint("Choose a parent customer that isn't a child of another").
-				Mark(ierr.ErrInvalidOperation)
-		}
-		// Normalize to internal ID for downstream logic
-		req.ParentCustomerID = lo.ToPtr(parent.ID)
-	} else if req.ParentCustomerID != nil {
-		parentCustomer, err := s.CustomerRepo.Get(ctx, *req.ParentCustomerID)
-		if err != nil {
-			return nil, err
-		}
-		if parentCustomer.ParentCustomerID != nil {
-			return nil, ierr.NewError("parent customer cannot be a child").
-				WithHint("Choose a parent customer that isn't a child of another").
-				Mark(ierr.ErrInvalidOperation)
-		}
-	}
-
 	cust := req.ToCustomer(ctx)
 
 	// Validate address fields
@@ -68,83 +42,10 @@ func (s *customerService) CreateCustomer(ctx context.Context, req dto.CreateCust
 			Mark(ierr.ErrValidation)
 	}
 
-	// Validate integration entity mappings if provided
-	if len(req.IntegrationEntityMapping) > 0 {
-		// Validation: Check that provider types are valid
-		for _, mapping := range req.IntegrationEntityMapping {
-			if mapping.Provider != string(types.SecretProviderStripe) {
-				return nil, ierr.NewError("unsupported provider type").
-					WithHint("Only Stripe provider is currently supported").
-					Mark(ierr.ErrValidation)
-			}
-			if mapping.ID == "" {
-				return nil, ierr.NewError("provider entity ID is required").
-					WithHint("Provider entity ID must be provided for integration mapping").
-					Mark(ierr.ErrValidation)
-			}
-		}
-	}
-
 	if err := s.DB.WithTx(ctx, func(txCtx context.Context) error {
 		if err := s.CustomerRepo.Create(txCtx, cust); err != nil {
 			// No need to wrap the error as the repository already returns properly formatted errors
 			return err
-		}
-
-		// Create integration entity mappings if provided
-		if len(req.IntegrationEntityMapping) > 0 {
-			entityMappingService := NewEntityIntegrationMappingService(s.ServiceParams)
-			for _, mapping := range req.IntegrationEntityMapping {
-				mappingReq := dto.CreateEntityIntegrationMappingRequest{
-					EntityID:         cust.ID,
-					EntityType:       types.IntegrationEntityTypeCustomer,
-					ProviderType:     mapping.Provider,
-					ProviderEntityID: mapping.ID,
-					Metadata: map[string]interface{}{
-						"created_via": "api",
-						"skip_sync":   true, // Skip automatic sync since we're using existing provider entity
-					},
-				}
-
-				_, err := entityMappingService.CreateEntityIntegrationMapping(txCtx, mappingReq)
-				if err != nil {
-					return err
-				}
-
-				// Update customer metadata to include provider mapping info
-				if cust.Metadata == nil {
-					cust.Metadata = make(map[string]string)
-				}
-				cust.Metadata[mapping.Provider+"_customer_id"] = mapping.ID
-
-				// Update provider customer metadata with FlexPrice info
-				if mapping.Provider == string(types.SecretProviderStripe) {
-					// Get Stripe integration
-					stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
-					if err != nil {
-						s.Logger.Warnw("failed to get Stripe integration for metadata update",
-							"error", err,
-							"customer_id", cust.ID)
-						// Don't fail the entire operation, just log the error
-						continue
-					}
-
-					// Update Stripe customer metadata with FlexPrice customer information
-					err = stripeIntegration.CustomerSvc.UpdateStripeCustomerMetadata(ctx, mapping.ID, cust)
-					if err != nil {
-						s.Logger.Warnw("failed to update Stripe customer metadata",
-							"error", err,
-							"stripe_customer_id", mapping.ID,
-							"customer_id", cust.ID)
-						// Don't fail the entire operation, just log the error
-					}
-				}
-			}
-
-			// Update customer with the new metadata
-			if err := s.CustomerRepo.Update(txCtx, cust); err != nil {
-				return err
-			}
 		}
 
 		taxService := NewTaxService(s.ServiceParams)
@@ -188,16 +89,16 @@ func (s *customerService) CreateCustomer(ctx context.Context, req dto.CreateCust
 	}
 
 	// Publish webhook event for customer creation
-	s.publishWebhookEvent(ctx, types.WebhookEventCustomerCreated, cust.ID)
+	s.publishSystemEvent(ctx, types.WebhookEventCustomerCreated, cust.ID)
 
 	// Check if we should skip the customer onboarding workflow
 	// This flag is used when a customer is created via a workflow to prevent infinite loops
 	if !req.SkipOnboardingWorkflow {
 		if err := s.handleCustomerOnboarding(ctx, cust); err != nil {
-			s.Logger.Errorw("failed to handle customer onboarding workflow", "customer_id", cust.ID, "error", err)
+			s.Logger.ErrorwCtx(ctx, "failed to handle customer onboarding workflow", "customer_id", cust.ID, "error", err)
 		}
 	} else {
-		s.Logger.Debugw("skipping customer onboarding workflow",
+		s.Logger.DebugwCtx(ctx, "skipping customer onboarding workflow",
 			"customer_id", cust.ID,
 			"external_id", cust.ExternalID,
 			"reason", "skip_onboarding_workflow flag is true")
@@ -218,17 +119,7 @@ func (s *customerService) GetCustomer(ctx context.Context, id string) (*dto.Cust
 		return nil, err
 	}
 
-	resp := &dto.CustomerResponse{Customer: customer}
-
-	if customer.ParentCustomerID != nil {
-		parentResp, err := s.GetCustomer(ctx, *customer.ParentCustomerID)
-		if err != nil {
-			return nil, err
-		}
-		resp.ParentCustomer = parentResp
-	}
-
-	return resp, nil
+	return &dto.CustomerResponse{Customer: customer}, nil
 }
 
 func (s *customerService) GetCustomers(ctx context.Context, filter *types.CustomerFilter) (*dto.ListCustomersResponse, error) {
@@ -273,45 +164,33 @@ func (s *customerService) GetCustomers(ctx context.Context, filter *types.Custom
 		}, nil
 	}
 
-	// Expand parent customers if requested
-	var parentCustomersByID map[string]*dto.CustomerResponse
-	if filter.GetExpand().Has(types.ExpandParentCustomer) {
-		// Collect all unique parent customer IDs
-		parentCustomerIDs := make([]string, 0)
-		parentCustomerIDSet := make(map[string]bool)
+	// Expand integration mappings if requested
+	var integrationsByCustomerID map[string][]*dto.EntityIntegrationMappingResponse
+	if filter.GetExpand().Has(types.ExpandIntegrations) {
+		customerIDs := make([]string, 0, len(customers))
 		for _, c := range customers {
-			if c.ParentCustomerID != nil && !parentCustomerIDSet[*c.ParentCustomerID] {
-				parentCustomerIDs = append(parentCustomerIDs, *c.ParentCustomerID)
-				parentCustomerIDSet[*c.ParentCustomerID] = true
-			}
+			customerIDs = append(customerIDs, c.ID)
 		}
 
-		if len(parentCustomerIDs) > 0 {
-			// Fetch parent customers in bulk
-			parentFilter := types.NewNoLimitCustomerFilter()
-			parentFilter.CustomerIDs = parentCustomerIDs
+		entityMappingService := NewEntityIntegrationMappingService(s.ServiceParams)
+		mappingFilter := types.NewNoLimitEntityIntegrationMappingFilter()
+		mappingFilter.EntityType = types.IntegrationEntityTypeCustomer
+		mappingFilter.EntityIDs = customerIDs
 
-			parentCustomers, err := s.CustomerRepo.List(ctx, parentFilter)
-			if err != nil {
-				return nil, err
-			}
+		mappings, err := entityMappingService.GetEntityIntegrationMappings(ctx, mappingFilter)
+		if err != nil {
+			return nil, err
+		}
 
-			// Create a map for quick parent customer lookup
-			parentCustomersByID = make(map[string]*dto.CustomerResponse, len(parentCustomers))
-			for _, pc := range parentCustomers {
-				parentCustomersByID[pc.ID] = &dto.CustomerResponse{Customer: pc}
-			}
-
-			s.Logger.Debugw("fetched parent customers for customers", "count", len(parentCustomers))
+		integrationsByCustomerID = make(map[string][]*dto.EntityIntegrationMappingResponse)
+		for _, m := range mappings.Items {
+			integrationsByCustomerID[m.EntityID] = append(integrationsByCustomerID[m.EntityID], m)
 		}
 	}
 
-	// Attach parent customers to response items
 	for _, resp := range response {
-		if resp.Customer.ParentCustomerID != nil {
-			if parentCustomer, ok := parentCustomersByID[*resp.Customer.ParentCustomerID]; ok {
-				resp.ParentCustomer = parentCustomer
-			}
+		if filter.GetExpand().Has(types.ExpandIntegrations) {
+			resp.Integrations = integrationsByCustomerID[resp.Customer.ID]
 		}
 	}
 
@@ -332,47 +211,9 @@ func (s *customerService) UpdateCustomer(ctx context.Context, id string, req dto
 		return nil, err
 	}
 
-	// Validate integration entity mappings if provided
-	if len(req.IntegrationEntityMapping) > 0 {
-		// Validation: Check that provider types are valid
-		for _, mapping := range req.IntegrationEntityMapping {
-			if mapping.Provider != string(types.SecretProviderStripe) {
-				return nil, ierr.NewError("unsupported provider type").
-					WithHint("Only Stripe provider is currently supported").
-					Mark(ierr.ErrValidation)
-			}
-			if mapping.ID == "" {
-				return nil, ierr.NewError("provider entity ID is required").
-					WithHint("Provider entity ID must be provided for integration mapping").
-					Mark(ierr.ErrValidation)
-			}
-		}
-	}
-
 	cust, err := s.CustomerRepo.Get(ctx, id)
 	if err != nil {
 		return nil, err
-	}
-
-	if req.ParentCustomerID != nil {
-		newParentID := strings.TrimSpace(*req.ParentCustomerID)
-		currentParentID := ""
-		if cust.ParentCustomerID != nil {
-			currentParentID = strings.TrimSpace(*cust.ParentCustomerID)
-		}
-
-		// Only run validations if the hierarchy is changing
-		if newParentID != currentParentID {
-			if err := s.validateParentCustomerAssignment(ctx, cust, newParentID); err != nil {
-				return nil, err
-			}
-
-			if newParentID == "" {
-				cust.ParentCustomerID = nil
-			} else {
-				cust.ParentCustomerID = lo.ToPtr(newParentID)
-			}
-		}
 	}
 
 	// Update basic fields
@@ -421,89 +262,6 @@ func (s *customerService) UpdateCustomer(ctx context.Context, id string, req dto
 		cust.Metadata = req.Metadata
 	}
 
-	// Handle integration entity mappings if provided
-	if len(req.IntegrationEntityMapping) > 0 {
-		entityMappingService := NewEntityIntegrationMappingService(s.ServiceParams)
-		for _, mapping := range req.IntegrationEntityMapping {
-			// Check if mapping already exists
-			filter := &types.EntityIntegrationMappingFilter{
-				EntityID:      cust.ID,
-				EntityType:    types.IntegrationEntityTypeCustomer,
-				ProviderTypes: []string{mapping.Provider},
-			}
-
-			existingMappings, err := entityMappingService.GetEntityIntegrationMappings(ctx, filter)
-			if err != nil {
-				return nil, err
-			}
-
-			if existingMappings != nil && len(existingMappings.Items) > 0 {
-				// Update existing mapping
-				existingMapping := existingMappings.Items[0]
-				updateReq := dto.UpdateEntityIntegrationMappingRequest{
-					ProviderEntityID: &mapping.ID,
-					Metadata: map[string]interface{}{
-						"updated_via": "api",
-						"skip_sync":   true,
-						"updated_at":  time.Now().UTC().Format(time.RFC3339),
-					},
-				}
-
-				_, err := entityMappingService.UpdateEntityIntegrationMapping(ctx, existingMapping.ID, updateReq)
-				if err != nil {
-					return nil, err
-				}
-			} else {
-				// Create new mapping
-				mappingReq := dto.CreateEntityIntegrationMappingRequest{
-					EntityID:         cust.ID,
-					EntityType:       types.IntegrationEntityTypeCustomer,
-					ProviderType:     mapping.Provider,
-					ProviderEntityID: mapping.ID,
-					Metadata: map[string]interface{}{
-						"created_via": "api",
-						"skip_sync":   true,
-						"created_at":  time.Now().UTC().Format(time.RFC3339),
-					},
-				}
-
-				_, err := entityMappingService.CreateEntityIntegrationMapping(ctx, mappingReq)
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			// Update customer metadata to include provider mapping info
-			if cust.Metadata == nil {
-				cust.Metadata = make(map[string]string)
-			}
-			cust.Metadata[mapping.Provider+"_customer_id"] = mapping.ID
-
-			// Update provider customer metadata with FlexPrice info
-			if mapping.Provider == string(types.SecretProviderStripe) {
-				// Get Stripe integration
-				stripeIntegration, err := s.IntegrationFactory.GetStripeIntegration(ctx)
-				if err != nil {
-					s.Logger.Warnw("failed to get Stripe integration for metadata update",
-						"error", err,
-						"customer_id", cust.ID)
-					// Don't fail the entire operation, just log the error
-					continue
-				}
-
-				// Update Stripe customer metadata with FlexPrice customer information
-				err = stripeIntegration.CustomerSvc.UpdateStripeCustomerMetadata(ctx, mapping.ID, cust)
-				if err != nil {
-					s.Logger.Warnw("failed to update Stripe customer metadata",
-						"error", err,
-						"stripe_customer_id", mapping.ID,
-						"customer_id", cust.ID)
-					// Don't fail the entire operation, just log the error
-				}
-			}
-		}
-	}
-
 	// Validate address fields after update
 	if err := customer.ValidateAddress(cust); err != nil {
 		return nil, ierr.WithError(err).
@@ -516,7 +274,7 @@ func (s *customerService) UpdateCustomer(ctx context.Context, id string, req dto
 		return nil, err
 	}
 
-	s.publishWebhookEvent(ctx, types.WebhookEventCustomerUpdated, cust.ID)
+	s.publishSystemEvent(ctx, types.WebhookEventCustomerUpdated, cust.ID)
 
 	return &dto.CustomerResponse{Customer: cust}, nil
 }
@@ -569,7 +327,7 @@ func (s *customerService) DeleteCustomer(ctx context.Context, id string) error {
 		return err
 	}
 
-	s.publishWebhookEvent(ctx, types.WebhookEventCustomerDeleted, id)
+	s.publishSystemEvent(ctx, types.WebhookEventCustomerDeleted, id)
 	return nil
 }
 
@@ -588,84 +346,30 @@ func (s *customerService) GetCustomerByLookupKey(ctx context.Context, lookupKey 
 	return &dto.CustomerResponse{Customer: customer}, nil
 }
 
-func (s *customerService) validateParentCustomerAssignment(ctx context.Context, cust *customer.Customer, newParentID string) error {
-	// Do not allow hierarchy changes when customer has non-cancelled subscriptions
-	subFilter := types.NewSubscriptionFilter()
-	subFilter.CustomerID = cust.ID
-	subFilter.SubscriptionStatusNotIn = []types.SubscriptionStatus{types.SubscriptionStatusCancelled}
-	subFilter.Limit = lo.ToPtr(1)
-
-	subs, err := s.SubRepo.List(ctx, subFilter)
-	if err != nil {
-		return err
-	}
-	if len(subs) > 0 {
-		return ierr.NewError("customer hierarchy cannot change with active subscriptions").
-			WithHint("Cancel or transfer subscriptions before updating parent hierarchy").
-			Mark(ierr.ErrInvalidOperation)
-	}
-
-	if newParentID == "" {
-		// Resetting parent - nothing else to validate
-		return nil
-	}
-
-	if newParentID == cust.ID {
-		return ierr.NewError("customer cannot be its own parent").
-			WithHint("Please provide a different customer as parent").
-			Mark(ierr.ErrValidation)
-	}
-
-	parentCustomer, err := s.CustomerRepo.Get(ctx, newParentID)
-	if err != nil {
-		return err
-	}
-	if parentCustomer.ParentCustomerID != nil {
-		return ierr.NewError("parent customer cannot have its own parent").
-			WithHint("Nested hierarchies are not supported; pick a top-level customer as parent").
-			Mark(ierr.ErrInvalidOperation)
-	}
-
-	// A customer that already has children cannot become a child itself
-	childFilter := types.NewCustomerFilter()
-	childFilter.ParentCustomerIDs = []string{cust.ID}
-	childFilter.Limit = lo.ToPtr(1)
-
-	children, err := s.CustomerRepo.List(ctx, childFilter)
-	if err != nil {
-		return err
-	}
-	if len(children) > 0 {
-		return ierr.NewError("customer already acts as a parent").
-			WithHint("A customer cannot be both parent and child; detach child customers first").
-			Mark(ierr.ErrInvalidOperation)
-	}
-
-	return nil
-}
-
-func (s *customerService) publishWebhookEvent(ctx context.Context, eventName string, customerID string) {
+func (s *customerService) publishSystemEvent(ctx context.Context, eventName types.WebhookEventName, customerID string) {
 	webhookPayload, err := json.Marshal(webhookDto.InternalCustomerEvent{
 		CustomerID: customerID,
 		TenantID:   types.GetTenantID(ctx),
 	})
 
 	if err != nil {
-		s.Logger.Errorw("failed to marshal webhook payload", "error", err)
+		s.Logger.ErrorwCtx(ctx, "failed to marshal webhook payload", "error", err)
 		return
 	}
 
 	webhookEvent := &types.WebhookEvent{
-		ID:            types.GenerateUUIDWithPrefix(types.UUID_PREFIX_WEBHOOK_EVENT),
+		ID:            types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SYSTEM_EVENT),
 		EventName:     eventName,
 		TenantID:      types.GetTenantID(ctx),
 		EnvironmentID: types.GetEnvironmentID(ctx),
 		UserID:        types.GetUserID(ctx),
 		Timestamp:     time.Now().UTC(),
 		Payload:       json.RawMessage(webhookPayload),
+		EntityType:    types.SystemEntityTypeCustomer,
+		EntityID:      customerID,
 	}
 	if err := s.WebhookPublisher.PublishWebhook(ctx, webhookEvent); err != nil {
-		s.Logger.Errorf("failed to publish %s event: %v", webhookEvent.EventName, err)
+		s.Logger.ErrorfCtx(ctx, "failed to publish %s event: %v", webhookEvent.EventName, err)
 	}
 }
 
@@ -719,7 +423,7 @@ func (s *customerService) GetUpcomingCreditGrantApplications(ctx context.Context
 }
 
 func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer *customer.Customer) error {
-	s.Logger.Infow("handling customer onboarding", "customer_id", customer.ID)
+	s.Logger.InfowCtx(ctx, "handling customer onboarding", "customer_id", customer.ID)
 
 	// Get customer onboarding workflow config
 	settingsService := &settingsService{
@@ -731,13 +435,13 @@ func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer
 	}
 
 	if workflowConfig == nil {
-		s.Logger.Infow("workflow config is nil, skipping customer onboarding", "customer_id", customer.ID)
+		s.Logger.InfowCtx(ctx, "workflow config is nil, skipping customer onboarding", "customer_id", customer.ID)
 		return nil
 	}
 
 	// If there are no actions, return
 	if len(workflowConfig.Actions) == 0 {
-		s.Logger.Infow("no actions found for customer onboarding", "customer_id", customer.ID)
+		s.Logger.InfowCtx(ctx, "no actions found for customer onboarding", "customer_id", customer.ID)
 		return nil
 	}
 
@@ -746,7 +450,7 @@ func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer
 	envID := types.GetEnvironmentID(ctx)
 	userID := types.GetUserID(ctx)
 
-	s.Logger.Infow("executing customer onboarding workflow",
+	s.Logger.InfowCtx(ctx, "executing customer onboarding workflow",
 		"customer_id", customer.ID,
 		"tenant_id", tenantID,
 		"environment_id", envID,
@@ -754,17 +458,19 @@ func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer
 		"action_count", len(workflowConfig.Actions))
 
 	// Prepare workflow input with all necessary IDs
+	// Pass both CustomerID and ExternalCustomerID so the workflow can skip create_customer when customer exists
 	input := &workflowModels.CustomerOnboardingWorkflowInput{
-		CustomerID:     customer.ID,
-		TenantID:       tenantID,
-		EnvironmentID:  envID,
-		UserID:         userID,
-		WorkflowConfig: *workflowConfig,
+		CustomerID:         customer.ID,
+		ExternalCustomerID: customer.ExternalID,
+		TenantID:           tenantID,
+		EnvironmentID:      envID,
+		UserID:             userID,
+		WorkflowConfig:     *workflowConfig,
 	}
 
 	// Validate input
 	if err := input.Validate(); err != nil {
-		s.Logger.Errorw("invalid workflow input for customer onboarding",
+		s.Logger.ErrorwCtx(ctx, "invalid workflow input for customer onboarding",
 			"error", err,
 			"customer_id", customer.ID)
 		return ierr.WithError(err).
@@ -793,7 +499,7 @@ func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer
 		input,
 	)
 	if err != nil {
-		s.Logger.Errorw("failed to start customer onboarding workflow",
+		s.Logger.ErrorwCtx(ctx, "failed to start customer onboarding workflow",
 			"error", err,
 			"customer_id", customer.ID)
 		return ierr.WithError(err).
@@ -804,7 +510,7 @@ func (s *customerService) handleCustomerOnboarding(ctx context.Context, customer
 			Mark(ierr.ErrInternal)
 	}
 
-	s.Logger.Infow("customer onboarding workflow started successfully",
+	s.Logger.InfowCtx(ctx, "customer onboarding workflow started successfully",
 		"customer_id", customer.ID,
 		"workflow_id", workflowRun.GetID(),
 		"run_id", workflowRun.GetRunID())

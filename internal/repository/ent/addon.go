@@ -65,7 +65,6 @@ func (r *addonRepository) Create(ctx context.Context, a *domainAddon.Addon) erro
 		SetStatus(string(a.Status)).
 		SetName(a.Name).
 		SetDescription(a.Description).
-		SetType(string(a.Type)).
 		SetLookupKey(a.LookupKey).
 		SetMetadata(a.Metadata).
 		SetCreatedBy(types.GetUserID(ctx)).
@@ -318,7 +317,6 @@ func (r *addonRepository) Update(ctx context.Context, a *domainAddon.Addon) erro
 		SetName(a.Name).
 		SetDescription(a.Description).
 		SetStatus(string(a.Status)).
-		SetType(string(a.Type)).
 		SetMetadata(a.Metadata).
 		SetUpdatedAt(time.Now().UTC()).
 		SetUpdatedBy(types.GetUserID(ctx)).
@@ -455,24 +453,12 @@ func (o AddonQueryOptions) ApplyPaginationFilter(query AddonQuery, limit int, of
 	return query
 }
 
+// GetFieldName returns the ent field name for addon; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o AddonQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return addon.FieldCreatedAt
-	case "updated_at":
-		return addon.FieldUpdatedAt
-	case "name":
-		return addon.FieldName
-	case "lookup_key":
-		return addon.FieldLookupKey
-	case "type":
-		return addon.FieldType
-	case "status":
-		return addon.FieldStatus
-	default:
-		// unknown field
-		return ""
+	if addon.ValidColumn(field) {
+		return field
 	}
+	return ""
 }
 
 func (o AddonQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.AddonFilter, query AddonQuery) (AddonQuery, error) {
@@ -484,11 +470,6 @@ func (o AddonQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.A
 	// Apply addon IDs filter if specified
 	if len(f.AddonIDs) > 0 {
 		query = query.Where(addon.IDIn(f.AddonIDs...))
-	}
-
-	// Apply addon type filter if specified
-	if f.AddonType != "" {
-		query = query.Where(addon.Type(string(f.AddonType)))
 	}
 
 	// Apply lookup keys filter if specified

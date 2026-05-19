@@ -165,6 +165,7 @@ func (Price) Fields() []ent.Field {
 			SchemaType(map[string]string{
 				"postgres": "varchar(20)",
 			}).
+			Default(string(types.BILLING_CADENCE_RECURRING)).
 			Immutable().
 			NotEmpty().
 			GoType(types.BillingCadence("")),
@@ -177,8 +178,9 @@ func (Price) Fields() []ent.Field {
 			Immutable().
 			GoType(types.InvoiceCadence("")),
 
-		field.Int("trial_period").
+		field.Int("trial_period_days").
 			Default(0).
+			NonNegative().
 			Immutable(),
 
 		field.String("meter_id").
@@ -264,6 +266,13 @@ func (Price) Fields() []ent.Field {
 			}).
 			Optional().
 			Nillable(),
+
+		// Monotonic sequence stamped on every plan-price state change that
+		// subscriptions need to react to (create, end_date set, compat edit).
+		// Used by the plan-price sync to find prices changed since each
+		// subscription's last reconciliation.
+		field.Int64("sequence").
+			Annotations(entsql.DefaultExpr("nextval('prices_sequence_seq')")),
 	}
 }
 
@@ -283,9 +292,12 @@ func (Price) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("tenant_id", "environment_id", "lookup_key").
 			Unique().
-			Annotations(entsql.IndexWhere("status = 'published' AND lookup_key IS NOT NULL AND lookup_key != ''")),
+			Annotations(entsql.IndexWhere("status = 'published' AND lookup_key IS NOT NULL AND lookup_key != '' AND end_date IS NULL")),
 		index.Fields("tenant_id", "environment_id"),
 		index.Fields("start_date", "end_date"),
 		index.Fields("tenant_id", "environment_id", "group_id"),
+		// To get "what changed since the sub's last synced_price_sequence"
+		index.Fields("tenant_id", "environment_id", "entity_id", "entity_type", "sequence").
+			Annotations(entsql.IndexWhere("status = 'published'")),
 	}
 }

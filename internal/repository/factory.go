@@ -26,12 +26,14 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/meter"
 	"github.com/flexprice/flexprice/internal/domain/payment"
 	"github.com/flexprice/flexprice/internal/domain/plan"
+	"github.com/flexprice/flexprice/internal/domain/planpricesync"
 	"github.com/flexprice/flexprice/internal/domain/price"
 	"github.com/flexprice/flexprice/internal/domain/priceunit"
 	"github.com/flexprice/flexprice/internal/domain/scheduledtask"
 	"github.com/flexprice/flexprice/internal/domain/secret"
 	"github.com/flexprice/flexprice/internal/domain/settings"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
+	domainsystemevent "github.com/flexprice/flexprice/internal/domain/systemevent"
 	"github.com/flexprice/flexprice/internal/domain/task"
 	taxrate "github.com/flexprice/flexprice/internal/domain/tax"
 	taxapplied "github.com/flexprice/flexprice/internal/domain/taxapplied"
@@ -39,6 +41,7 @@ import (
 	"github.com/flexprice/flexprice/internal/domain/tenant"
 	"github.com/flexprice/flexprice/internal/domain/user"
 	"github.com/flexprice/flexprice/internal/domain/wallet"
+	"github.com/flexprice/flexprice/internal/domain/workflowexecution"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/postgres"
 	clickhouseRepo "github.com/flexprice/flexprice/internal/repository/clickhouse"
@@ -68,6 +71,10 @@ func NewFeatureUsageRepository(p RepositoryParams) events.FeatureUsageRepository
 	return clickhouseRepo.NewFeatureUsageRepository(p.ClickHouseDB, p.Logger)
 }
 
+func NewRawEventRepository(p RepositoryParams) events.RawEventRepository {
+	return clickhouseRepo.NewRawEventRepository(p.ClickHouseDB, p.Logger)
+}
+
 func NewMeterRepository(p RepositoryParams) meter.Repository {
 	return entRepo.NewMeterRepository(p.EntClient, p.Logger, p.Cache)
 }
@@ -92,6 +99,10 @@ func NewPlanRepository(p RepositoryParams) plan.Repository {
 	return entRepo.NewPlanRepository(p.EntClient, p.Logger, p.Cache)
 }
 
+func NewPlanPriceSyncRepository(p RepositoryParams) planpricesync.Repository {
+	return entRepo.NewPlanPriceSyncRepository(p.EntClient, p.Logger)
+}
+
 func NewSubscriptionRepository(p RepositoryParams) subscription.Repository {
 	return entRepo.NewSubscriptionRepository(p.EntClient, p.Logger, p.Cache)
 }
@@ -102,6 +113,10 @@ func NewSubscriptionLineItemRepository(p RepositoryParams) subscription.LineItem
 
 func NewSubscriptionPhaseRepository(p RepositoryParams) subscription.SubscriptionPhaseRepository {
 	return entRepo.NewSubscriptionPhaseRepository(p.EntClient, p.Logger, p.Cache)
+}
+
+func NewSubscriptionScheduleRepository(p RepositoryParams) subscription.SubscriptionScheduleRepository {
+	return entRepo.NewSubscriptionScheduleRepository(p.EntClient, p.Logger)
 }
 
 func NewWalletRepository(p RepositoryParams) wallet.Repository {
@@ -118,6 +133,10 @@ func NewEnvironmentRepository(p RepositoryParams) environment.Repository {
 
 func NewInvoiceRepository(p RepositoryParams) invoice.Repository {
 	return entRepo.NewInvoiceRepository(p.EntClient, p.Logger, p.Cache)
+}
+
+func NewInvoiceLineItemRepository(p RepositoryParams) invoice.LineItemRepository {
+	return entRepo.NewInvoiceLineItemRepository(p.EntClient, p.Logger, p.Cache)
 }
 
 func NewFeatureRepository(p RepositoryParams) feature.Repository {
@@ -212,6 +231,14 @@ func NewAlertLogsRepository(p RepositoryParams) alertlogs.Repository {
 	return entRepo.NewAlertLogsRepository(p.EntClient, p.Logger, p.Cache)
 }
 
+func NewSystemEventRepository(p RepositoryParams) *entRepo.SystemEventRepository {
+	return entRepo.NewSystemEventRepository(p.EntClient)
+}
+
+func NewSystemEventDomainRepository(repo *entRepo.SystemEventRepository) domainsystemevent.Repository {
+	return repo
+}
+
 func NewGroupRepository(p RepositoryParams) group.Repository {
 	return entRepo.NewGroupRepository(p.EntClient, p.Logger, p.Cache)
 }
@@ -222,4 +249,16 @@ func NewScheduledTaskRepository(p RepositoryParams) scheduledtask.Repository {
 
 func NewCostSheetUsageRepository(p RepositoryParams) events.CostSheetUsageRepository {
 	return clickhouseRepo.NewCostSheetUsageRepository(p.ClickHouseDB, p.Logger)
+}
+
+func NewMeterUsageRepository(p RepositoryParams) events.MeterUsageRepository {
+	return clickhouseRepo.NewMeterUsageRepository(p.ClickHouseDB, p.Logger)
+}
+
+func NewUsageBenchmarkRepository(p RepositoryParams) events.UsageBenchmarkRepository {
+	return clickhouseRepo.NewUsageBenchmarkRepository(p.ClickHouseDB, p.Logger)
+}
+
+func NewWorkflowExecutionRepository(p RepositoryParams) workflowexecution.Repository {
+	return entRepo.NewWorkflowExecutionRepository(p.EntClient, p.Logger, p.Cache)
 }

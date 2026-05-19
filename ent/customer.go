@@ -52,9 +52,7 @@ type Customer struct {
 	AddressPostalCode string `json:"address_postal_code,omitempty"`
 	// AddressCountry holds the value of the "address_country" field.
 	AddressCountry string `json:"address_country,omitempty"`
-	// ParentCustomerID holds the value of the "parent_customer_id" field.
-	ParentCustomerID *string `json:"parent_customer_id,omitempty"`
-	selectValues     sql.SelectValues
+	selectValues   sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -64,7 +62,7 @@ func (*Customer) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case customer.FieldMetadata:
 			values[i] = new([]byte)
-		case customer.FieldID, customer.FieldTenantID, customer.FieldStatus, customer.FieldCreatedBy, customer.FieldUpdatedBy, customer.FieldEnvironmentID, customer.FieldExternalID, customer.FieldName, customer.FieldEmail, customer.FieldAddressLine1, customer.FieldAddressLine2, customer.FieldAddressCity, customer.FieldAddressState, customer.FieldAddressPostalCode, customer.FieldAddressCountry, customer.FieldParentCustomerID:
+		case customer.FieldID, customer.FieldTenantID, customer.FieldStatus, customer.FieldCreatedBy, customer.FieldUpdatedBy, customer.FieldEnvironmentID, customer.FieldExternalID, customer.FieldName, customer.FieldEmail, customer.FieldAddressLine1, customer.FieldAddressLine2, customer.FieldAddressCity, customer.FieldAddressState, customer.FieldAddressPostalCode, customer.FieldAddressCountry:
 			values[i] = new(sql.NullString)
 		case customer.FieldCreatedAt, customer.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -193,13 +191,6 @@ func (_m *Customer) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.AddressCountry = value.String
 			}
-		case customer.FieldParentCustomerID:
-			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field parent_customer_id", values[i])
-			} else if value.Valid {
-				_m.ParentCustomerID = new(string)
-				*_m.ParentCustomerID = value.String
-			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -286,11 +277,6 @@ func (_m *Customer) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("address_country=")
 	builder.WriteString(_m.AddressCountry)
-	builder.WriteString(", ")
-	if v := _m.ParentCustomerID; v != nil {
-		builder.WriteString("parent_customer_id=")
-		builder.WriteString(*v)
-	}
 	builder.WriteByte(')')
 	return builder.String()
 }

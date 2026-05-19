@@ -368,6 +368,76 @@ func (_c *InvoiceLineItemCreate) SetCommitmentInfo(v *types.CommitmentInfo) *Inv
 	return _c
 }
 
+// SetPrepaidCreditsApplied sets the "prepaid_credits_applied" field.
+func (ilic *InvoiceLineItemCreate) SetPrepaidCreditsApplied(d decimal.Decimal) *InvoiceLineItemCreate {
+	ilic.mutation.SetPrepaidCreditsApplied(d)
+	return ilic
+}
+
+// SetNillablePrepaidCreditsApplied sets the "prepaid_credits_applied" field if the given value is not nil.
+func (ilic *InvoiceLineItemCreate) SetNillablePrepaidCreditsApplied(d *decimal.Decimal) *InvoiceLineItemCreate {
+	if d != nil {
+		ilic.SetPrepaidCreditsApplied(*d)
+	}
+	return ilic
+}
+
+// SetLineItemDiscount sets the "line_item_discount" field.
+func (ilic *InvoiceLineItemCreate) SetLineItemDiscount(d decimal.Decimal) *InvoiceLineItemCreate {
+	ilic.mutation.SetLineItemDiscount(d)
+	return ilic
+}
+
+// SetNillableLineItemDiscount sets the "line_item_discount" field if the given value is not nil.
+func (ilic *InvoiceLineItemCreate) SetNillableLineItemDiscount(d *decimal.Decimal) *InvoiceLineItemCreate {
+	if d != nil {
+		ilic.SetLineItemDiscount(*d)
+	}
+	return ilic
+}
+
+// SetInvoiceLevelDiscount sets the "invoice_level_discount" field.
+func (ilic *InvoiceLineItemCreate) SetInvoiceLevelDiscount(d decimal.Decimal) *InvoiceLineItemCreate {
+	ilic.mutation.SetInvoiceLevelDiscount(d)
+	return ilic
+}
+
+// SetNillableInvoiceLevelDiscount sets the "invoice_level_discount" field if the given value is not nil.
+func (ilic *InvoiceLineItemCreate) SetNillableInvoiceLevelDiscount(d *decimal.Decimal) *InvoiceLineItemCreate {
+	if d != nil {
+		ilic.SetInvoiceLevelDiscount(*d)
+	}
+	return ilic
+}
+
+// SetSubscriptionLineItemID sets the "subscription_line_item_id" field.
+func (ilic *InvoiceLineItemCreate) SetSubscriptionLineItemID(s string) *InvoiceLineItemCreate {
+	ilic.mutation.SetSubscriptionLineItemID(s)
+	return ilic
+}
+
+// SetNillableSubscriptionLineItemID sets the "subscription_line_item_id" field if the given value is not nil.
+func (ilic *InvoiceLineItemCreate) SetNillableSubscriptionLineItemID(s *string) *InvoiceLineItemCreate {
+	if s != nil {
+		ilic.SetSubscriptionLineItemID(*s)
+	}
+	return ilic
+}
+
+// SetAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field.
+func (ilic *InvoiceLineItemCreate) SetAdjustedEntitlementQuantity(d decimal.Decimal) *InvoiceLineItemCreate {
+	ilic.mutation.SetAdjustedEntitlementQuantity(d)
+	return ilic
+}
+
+// SetNillableAdjustedEntitlementQuantity sets the "adjusted_entitlement_quantity" field if the given value is not nil.
+func (ilic *InvoiceLineItemCreate) SetNillableAdjustedEntitlementQuantity(d *decimal.Decimal) *InvoiceLineItemCreate {
+	if d != nil {
+		ilic.SetAdjustedEntitlementQuantity(*d)
+	}
+	return ilic
+}
+
 // SetID sets the "id" field.
 func (_c *InvoiceLineItemCreate) SetID(v string) *InvoiceLineItemCreate {
 	_c.mutation.SetID(v)
@@ -452,6 +522,18 @@ func (_c *InvoiceLineItemCreate) defaults() {
 	if _, ok := _c.mutation.Quantity(); !ok {
 		v := invoicelineitem.DefaultQuantity
 		_c.mutation.SetQuantity(v)
+	}
+	if _, ok := _c.mutation.PrepaidCreditsApplied(); !ok {
+		v := invoicelineitem.DefaultPrepaidCreditsApplied
+		_c.mutation.SetPrepaidCreditsApplied(v)
+	}
+	if _, ok := _c.mutation.LineItemDiscount(); !ok {
+		v := invoicelineitem.DefaultLineItemDiscount
+		_c.mutation.SetLineItemDiscount(v)
+	}
+	if _, ok := _c.mutation.InvoiceLevelDiscount(); !ok {
+		v := invoicelineitem.DefaultInvoiceLevelDiscount
+		_c.mutation.SetInvoiceLevelDiscount(v)
 	}
 }
 
@@ -654,6 +736,26 @@ func (_c *InvoiceLineItemCreate) createSpec() (*InvoiceLineItem, *sqlgraph.Creat
 	if value, ok := _c.mutation.CommitmentInfo(); ok {
 		_spec.SetField(invoicelineitem.FieldCommitmentInfo, field.TypeJSON, value)
 		_node.CommitmentInfo = value
+	}
+	if value, ok := _c.mutation.PrepaidCreditsApplied(); ok {
+		_spec.SetField(invoicelineitem.FieldPrepaidCreditsApplied, field.TypeOther, value)
+		_node.PrepaidCreditsApplied = &value
+	}
+	if value, ok := _c.mutation.LineItemDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldLineItemDiscount, field.TypeOther, value)
+		_node.LineItemDiscount = &value
+	}
+	if value, ok := _c.mutation.InvoiceLevelDiscount(); ok {
+		_spec.SetField(invoicelineitem.FieldInvoiceLevelDiscount, field.TypeOther, value)
+		_node.InvoiceLevelDiscount = &value
+	}
+	if value, ok := _c.mutation.SubscriptionLineItemID(); ok {
+		_spec.SetField(invoicelineitem.FieldSubscriptionLineItemID, field.TypeString, value)
+		_node.SubscriptionLineItemID = &value
+	}
+	if value, ok := _c.mutation.AdjustedEntitlementQuantity(); ok {
+		_spec.SetField(invoicelineitem.FieldAdjustedEntitlementQuantity, field.TypeOther, value)
+		_node.AdjustedEntitlementQuantity = &value
 	}
 	if nodes := _c.mutation.InvoiceIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

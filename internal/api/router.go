@@ -10,8 +10,6 @@ import (
 	"github.com/flexprice/flexprice/internal/rest/middleware"
 	"github.com/flexprice/flexprice/internal/service"
 	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 type Handlers struct {
@@ -27,8 +25,9 @@ type Handlers struct {
 	Connection               *v1.ConnectionHandler
 	Plan                     *v1.PlanHandler
 	Subscription             *v1.SubscriptionHandler
-	SubscriptionPause        *v1.SubscriptionPauseHandler
 	SubscriptionChange       *v1.SubscriptionChangeHandler
+	SubscriptionModification *v1.SubscriptionModificationHandler
+	SubscriptionSchedule     *v1.SubscriptionScheduleHandler
 	Wallet                   *v1.WalletHandler
 	Tenant                   *v1.TenantHandler
 	Invoice                  *v1.InvoiceHandler
@@ -45,7 +44,7 @@ type Handlers struct {
 	Coupon                   *v1.CouponHandler
 	Webhook                  *v1.WebhookHandler
 	Addon                    *v1.AddonHandler
-	EntityIntegrationMapping *v1.EntityIntegrationMappingHandler
+	Integration              *v1.IntegrationHandler
 	Settings                 *v1.SettingsHandler
 	SetupIntent              *v1.SetupIntentHandler
 	Group                    *v1.GroupHandler
@@ -53,11 +52,15 @@ type Handlers struct {
 	AlertLogsHandler         *v1.AlertLogsHandler
 	RBAC                     *v1.RBACHandler
 	OAuth                    *v1.OAuthHandler
+	Dashboard                *v1.DashboardHandler
+	Workflow                 *v1.WorkflowHandler
+	MeterUsage               *v1.MeterUsageHandler
 
 	// Portal handlers
 	Onboarding     *v1.OnboardingHandler
+	AIPricing      *v1.AIPricingHandler
 	CustomerPortal *v1.CustomerPortalHandler
-	// Cron jobs : TODO: move crons out of API based architecture
+	// Cron jobs: optional HTTP /v1/cron/... manual triggers; same work is automated via Temporal server schedules (worker creates them on startup).
 	CronSubscription       *cron.SubscriptionHandler
 	CronWallet             *cron.WalletCronHandler
 	CronCreditGrant        *cron.CreditGrantCronHandler
@@ -68,9 +71,16 @@ type Handlers struct {
 func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logger, secretService service.SecretService, envAccessService service.EnvAccessService, rbacService *rbac.RBACService) *gin.Engine {
 	// gin.SetMode(gin.ReleaseMode)
 
-	router := gin.Default()
+	// Create a new gin engine without default middleware
+	router := gin.New()
+
+	// Add recovery middleware (panic recovery)
+	router.Use(gin.RecoveryWithWriter(logger.GetGinLogger()))
+
+	// Add our custom middleware in order
 	router.Use(
-		middleware.RequestIDMiddleware,
+		middleware.RequestIDMiddleware,       // Generate/extract request ID first
+		middleware.LoggingMiddleware(logger), // Use our standard logger for HTTP logging
 		middleware.CORSMiddleware,
 		middleware.SentryMiddleware(cfg),    // Add Sentry middleware
 		middleware.PyroscopeMiddleware(cfg), // Add Pyroscope middleware
@@ -90,8 +100,6 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 	// Health check
 	router.GET("/health", handlers.Health.Health)
 	router.POST("/health", handlers.Health.Health)
-	// Swagger documentation
-	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// Public routes
 	public := router.Group("/", middleware.GuestAuthenticateMiddleware)
@@ -107,6 +115,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 
 	private := router.Group("/", middleware.AuthenticateMiddleware(cfg, secretService, logger))
 	private.Use(middleware.EnvAccessMiddleware(envAccessService, logger))
+	private.Use(middleware.SentryTenantContextMiddleware)
 
 	v1Private := private.Group("/v1")
 	v1Private.Use(middleware.ErrorHandler())
@@ -115,7 +124,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		{
 			user.GET("/me", handlers.User.GetUserInfo)
 			user.POST("", handlers.User.CreateUser)
-			user.POST("/search", handlers.User.ListUsersByFilter)
+			user.POST("/search", handlers.User.QueryUsers)
 		}
 
 		environment := v1Private.Group("/environments")
@@ -124,6 +133,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			environment.GET("", handlers.Environment.GetEnvironments)
 			environment.GET("/:id", handlers.Environment.GetEnvironment)
 			environment.PUT("/:id", handlers.Environment.UpdateEnvironment)
+			environment.POST("/:id/clone", handlers.Environment.CloneEnvironment)
 		}
 
 		// Events routes
@@ -132,6 +142,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			events.POST("", permissionMW.RequirePermission("event", "write"), handlers.Events.IngestEvent)
 			events.POST("/bulk", permissionMW.RequirePermission("event", "write"), handlers.Events.BulkIngestEvent)
 			events.GET("", handlers.Events.GetEvents)
+			events.GET("/:id", handlers.Events.GetEventByID)
 			events.POST("/query", handlers.Events.QueryEvents)
 			events.POST("/usage", handlers.Events.GetUsage)
 			events.POST("/usage/meter", handlers.Events.GetUsageByMeter)
@@ -139,6 +150,23 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			events.POST("/analytics-v2", handlers.Events.GetUsageAnalyticsV2)
 			events.POST("/huggingface-billing", handlers.Events.GetHuggingFaceBillingData)
 			events.GET("/monitoring", handlers.Events.GetMonitoringData)
+			// Reprocess events endpoint
+			events.POST("/reprocess", handlers.Events.ReprocessEvents)
+			// Raw event ingestion (Bento-format, publishes directly to raw_events topic)
+			events.POST("/raw/bulk", permissionMW.RequirePermission("event", "write"), handlers.Events.BulkIngestRawEvent)
+			// Reprocess raw events endpoints
+			events.POST("/raw/reprocess/all", handlers.Events.ReprocessRawEvents)
+			events.POST("/raw/reprocess/pending", handlers.Events.ReprocessUnprocessedRawEvents)
+			// Internal reprocess events endpoint (no external_customer_id required)
+			events.POST("/reprocess/internal", handlers.Events.ReprocessEventsInternal)
+		}
+
+		// Meter usage query endpoints (reads from meter_usage ClickHouse table)
+		meterUsage := v1Private.Group("/meter-usage")
+		{
+			meterUsage.POST("/query", handlers.MeterUsage.QueryUsage)
+			meterUsage.POST("/analytics", handlers.MeterUsage.GetAnalytics)
+			meterUsage.POST("/detailed-analytics", handlers.MeterUsage.GetDetailedAnalytics)
 		}
 
 		meters := v1Private.Group("/meters")
@@ -155,11 +183,12 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		{
 			price.POST("", handlers.Price.CreatePrice)
 			price.POST("/bulk", handlers.Price.CreateBulkPrice)
-			price.GET("", handlers.Price.GetPrices)
+			price.GET("", handlers.Price.ListPrices)
 			price.GET("/:id", handlers.Price.GetPrice)
 			price.PUT("/:id", handlers.Price.UpdatePrice)
 			price.DELETE("/:id", handlers.Price.DeletePrice)
 			price.GET("/lookup/:lookup_key", handlers.Price.GetByLookupKey)
+			price.POST("/search", handlers.Price.QueryPrices)
 
 			priceUnit := price.Group("/units")
 			{
@@ -169,7 +198,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 				priceUnit.GET("/code/:code", handlers.PriceUnit.GetPriceUnitByCode)
 				priceUnit.PUT("/:id", handlers.PriceUnit.UpdatePriceUnit)
 				priceUnit.DELETE("/:id", handlers.PriceUnit.DeletePriceUnit)
-				priceUnit.POST("/search", handlers.PriceUnit.ListPriceUnitsByFilter)
+				priceUnit.POST("/search", handlers.PriceUnit.QueryPriceUnits)
 			}
 		}
 
@@ -177,12 +206,13 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		{
 
 			// list customers by filter
-			customer.POST("/search", handlers.Customer.ListCustomersByFilter)
+			customer.POST("/search", handlers.Customer.QueryCustomers)
 
 			customer.POST("", handlers.Customer.CreateCustomer)
-			customer.GET("", handlers.Customer.GetCustomers)
+			customer.GET("", handlers.Customer.ListCustomers)
+			customer.PUT("", handlers.Customer.UpdateCustomer) // Supports query params (id or external_customer_id)
 			customer.GET("/:id", handlers.Customer.GetCustomer)
-			customer.PUT("/:id", handlers.Customer.UpdateCustomer)
+			customer.PUT("/:id", handlers.Customer.UpdateCustomer) // Supports path parameter or query params
 			customer.DELETE("/:id", handlers.Customer.DeleteCustomer)
 			customer.GET("/lookup/:lookup_key", handlers.Customer.GetCustomerByLookupKey)    // Legacy route with lookup_key as path parameter
 			customer.GET("/external/:external_id", handlers.Customer.GetCustomerByLookupKey) // New route with external_id as path parameter
@@ -206,14 +236,16 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		plan := v1Private.Group("/plans")
 		{
 			// list plans by filter
-			plan.POST("/search", handlers.Plan.ListPlansByFilter)
+			plan.POST("/search", handlers.Plan.QueryPlans)
 
 			plan.POST("", handlers.Plan.CreatePlan)
-			plan.GET("", handlers.Plan.GetPlans)
+			plan.GET("", handlers.Plan.ListPlans)
 			plan.GET("/:id", handlers.Plan.GetPlan)
 			plan.PUT("/:id", handlers.Plan.UpdatePlan)
 			plan.DELETE("/:id", handlers.Plan.DeletePlan)
+			plan.POST("/:id/clone", handlers.Plan.ClonePlan)
 			plan.POST("/:id/sync/subscriptions", handlers.Plan.SyncPlanPrices)
+			plan.POST("/:id/sync/subscriptions/v2", handlers.Plan.SyncPlanPricesV2)
 
 			// entitlement routes
 			plan.GET("/:id/entitlements", handlers.Plan.GetPlanEntitlements)
@@ -223,10 +255,10 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		addon := v1Private.Group("/addons")
 		{
 			// list addons by filter
-			addon.POST("/search", handlers.Addon.ListAddonsByFilter)
+			addon.POST("/search", handlers.Addon.QueryAddons)
 
 			addon.POST("", handlers.Addon.CreateAddon)
-			addon.GET("", handlers.Addon.GetAddons)
+			addon.GET("", handlers.Addon.ListAddons)
 			addon.GET("/:id", handlers.Addon.GetAddon)
 			addon.GET("/lookup/:lookup_key", handlers.Addon.GetAddonByLookupKey)
 			addon.PUT("/:id", handlers.Addon.UpdateAddon)
@@ -237,24 +269,24 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		group := v1Private.Group("/groups")
 		{
 			group.POST("", handlers.Group.CreateGroup)
-			group.POST("/search", handlers.Group.ListGroups)
+			group.POST("/search", handlers.Group.QueryGroups)
 			group.GET("/:id", handlers.Group.GetGroup)
 			group.DELETE("/:id", handlers.Group.DeleteGroup)
 		}
 
 		subscription := v1Private.Group("/subscriptions")
 		{
-			subscription.POST("/search", handlers.Subscription.ListSubscriptionsByFilter)
+			subscription.POST("/search", handlers.Subscription.QuerySubscriptions)
 			subscription.POST("", handlers.Subscription.CreateSubscription)
-			subscription.GET("", handlers.Subscription.GetSubscriptions)
+			subscription.GET("", handlers.Subscription.ListSubscriptions)
+			subscription.POST("/lineitems/search", handlers.Subscription.QuerySubscriptionLineItems)
 			subscription.GET("/:id", handlers.Subscription.GetSubscription)
+			subscription.PUT("/:id", handlers.Subscription.UpdateSubscription)
+			subscription.GET("/:id/v2", handlers.Subscription.GetSubscriptionV2)
 			subscription.POST("/:id/activate", handlers.Subscription.ActivateDraftSubscription)
 			subscription.POST("/:id/cancel", handlers.Subscription.CancelSubscription)
 			subscription.POST("/usage", handlers.Subscription.GetUsageBySubscription)
 
-			subscription.POST("/:id/pause", handlers.SubscriptionPause.PauseSubscription)
-			subscription.POST("/:id/resume", handlers.SubscriptionPause.ResumeSubscription)
-			subscription.GET("/:id/pauses", handlers.SubscriptionPause.ListPauses)
 			subscription.GET("/:id/entitlements", handlers.Subscription.GetSubscriptionEntitlements)
 			subscription.GET("/:id/grants/upcoming", handlers.Subscription.GetUpcomingCreditGrantApplications)
 
@@ -266,13 +298,31 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			// Subscription plan changes (upgrade/downgrade)
 			subscription.POST("/:id/change/preview", handlers.SubscriptionChange.PreviewSubscriptionChange)
 			subscription.POST("/:id/change/execute", handlers.SubscriptionChange.ExecuteSubscriptionChange)
+			subscription.POST(":id/modify/execute", handlers.SubscriptionModification.Execute)
+			subscription.POST(":id/modify/preview", handlers.SubscriptionModification.Preview)
 
-			// Subscription line item management
+			// Subscription line item management (POST /lineitems/search registered above)
+			subscription.POST("/:id/lineitems", handlers.Subscription.AddSubscriptionLineItem)
 			subscription.PUT("/lineitems/:id", handlers.Subscription.UpdateSubscriptionLineItem)
 			subscription.DELETE("/lineitems/:id", handlers.Subscription.DeleteSubscriptionLineItem)
 
 			subscription.POST("/temporal/schedule-update-billing-period", handlers.ScheduledTask.ScheduleUpdateBillingPeriod)
+			subscription.POST("/temporal/schedule-draft-finalization", handlers.ScheduledTask.ScheduleDraftFinalization)
 
+			// Trigger subscription billing workflow
+			subscription.POST("/temporal/:subscription_id/trigger-workflow", handlers.Subscription.TriggerSubscriptionWorkflow)
+			subscription.POST("/temporal/:subscription_id/draft-and-compute", handlers.Subscription.TriggerSubscriptionDraftAndComputeWorkflow)
+
+			// Subscription schedules - nested group
+			subscription.GET("/:id/schedules", handlers.SubscriptionSchedule.ListSchedulesForSubscription)
+
+			schedules := subscription.Group("/schedules")
+			{
+				schedules.GET("", handlers.SubscriptionSchedule.ListSchedules)
+				schedules.GET("/:schedule_id", handlers.SubscriptionSchedule.GetSchedule)
+				schedules.POST("/:schedule_id/cancel", handlers.SubscriptionSchedule.CancelSchedule)
+				schedules.POST("/cancel", handlers.SubscriptionSchedule.CancelSchedule) // Cancel by body only
+			}
 		}
 
 		wallet := v1Private.Group("/wallets")
@@ -284,16 +334,15 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			wallet.POST("/:id/top-up", handlers.Wallet.TopUpWallet)
 			wallet.POST("/:id/terminate", handlers.Wallet.TerminateWallet)
 			wallet.GET("/:id/balance/real-time", handlers.Wallet.GetWalletBalance)
-			wallet.GET("/:id/balance/real-time-v2", handlers.Wallet.GetWalletBalanceV2)
+			wallet.GET("/:id/balance/real-time-cached", handlers.Wallet.GetWalletBalanceForceCached)
 			wallet.PUT("/:id", handlers.Wallet.UpdateWallet)
 			wallet.POST("/:id/debit", handlers.Wallet.ManualBalanceDebit)
-			wallet.POST("/transactions/search", handlers.Wallet.ListWalletTransactionsByFilter)
-			wallet.POST("/search", handlers.Wallet.ListWalletsByFilter)
+			wallet.POST("/transactions/search", handlers.Wallet.QueryWalletTransactions)
+			wallet.POST("/search", handlers.Wallet.QueryWallets)
 		}
 		// Tenant routes
 		tenantRoutes := v1Private.Group("/tenants")
 		{
-			tenantRoutes.POST("", handlers.Tenant.CreateTenant)
 			tenantRoutes.PUT("/update", handlers.Tenant.UpdateTenant)
 			tenantRoutes.GET("/:id", handlers.Tenant.GetTenantByID)
 			tenantRoutes.GET("/billing", handlers.Tenant.GetTenantBillingUsage)
@@ -301,19 +350,25 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 
 		invoices := v1Private.Group("/invoices")
 		{
-			invoices.POST("/search", handlers.Invoice.ListInvoicesByFilter)
+			invoices.POST("/temporal/:invoice_id/finalize", handlers.Invoice.TriggerFinalizeDraftInvoiceWorkflow)
+			invoices.POST("/search", handlers.Invoice.QueryInvoices)
 			invoices.POST("", handlers.Invoice.CreateOneOffInvoice)
 			invoices.GET("", handlers.Invoice.ListInvoices)
 			invoices.GET("/:id", handlers.Invoice.GetInvoice)
 			invoices.PUT("/:id", handlers.Invoice.UpdateInvoice)
 			invoices.POST("/:id/finalize", handlers.Invoice.FinalizeInvoice)
+			invoices.POST("/:id/compute", handlers.Invoice.ComputeInvoice)
 			invoices.POST("/:id/void", handlers.Invoice.VoidInvoice)
 			invoices.POST("/preview", handlers.Invoice.GetPreviewInvoice)
+			invoices.POST("/internal/preview", handlers.Invoice.GetInternalPreviewInvoice)
+			invoices.POST("/meter-usage-preview", handlers.Invoice.GetMeterUsagePreviewInvoice)
 			invoices.PUT("/:id/payment", handlers.Invoice.UpdatePaymentStatus)
 			invoices.POST("/:id/payment/attempt", handlers.Invoice.AttemptPayment)
 			invoices.GET("/:id/pdf", handlers.Invoice.GetInvoicePDF)
 			invoices.POST("/:id/recalculate", handlers.Invoice.RecalculateInvoice)
+			invoices.POST("/:id/recalculate-v2", handlers.Invoice.RecalculateInvoiceV2)
 			invoices.POST("/:id/comms/trigger", handlers.Invoice.TriggerCommunication)
+			invoices.POST("/:id/webhook/trigger", handlers.Invoice.TriggerWebhook)
 		}
 
 		feature := v1Private.Group("/features")
@@ -324,12 +379,13 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			feature.GET("/:id", handlers.Feature.GetFeature)
 			feature.PUT("/:id", handlers.Feature.UpdateFeature)
 			feature.DELETE("/:id", handlers.Feature.DeleteFeature)
-			feature.POST("/search", handlers.Feature.ListFeaturesByFilter)
+			feature.POST("/search", handlers.Feature.QueryFeatures)
+			feature.POST("/:id/clone", handlers.Feature.CloneFeature)
 		}
 
 		entitlement := v1Private.Group("/entitlements")
 		{
-			entitlement.POST("/search", handlers.Entitlement.ListEntitlementsByFilter)
+			entitlement.POST("/search", handlers.Entitlement.QueryEntitlements)
 			entitlement.POST("", handlers.Entitlement.CreateEntitlement)
 			entitlement.POST("/bulk", handlers.Entitlement.CreateBulkEntitlement)
 			entitlement.GET("", handlers.Entitlement.ListEntitlements)
@@ -414,32 +470,23 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 				apiKeys.POST("", handlers.Secret.CreateAPIKey)
 				apiKeys.DELETE("/:id", handlers.Secret.DeleteAPIKey)
 			}
-
-			// Integration routes
-			integrations := secrets.Group("/integrations")
-			{
-				integrations.GET("/linked", handlers.Secret.ListLinkedIntegrations)
-				integrations.POST("/create/:provider", handlers.Secret.CreateIntegration)
-				integrations.GET("/by-provider/:provider", handlers.Secret.GetIntegration)
-				integrations.DELETE("/:id", handlers.Secret.DeleteIntegration)
-			}
 		}
 
 		// Connection routes
 		connections := v1Private.Group("/connections")
 		{
 			connections.POST("", handlers.Connection.CreateConnection)
-			connections.GET("", handlers.Connection.GetConnections)
+			connections.GET("", handlers.Connection.ListConnections)
 			connections.GET("/:id", handlers.Connection.GetConnection)
 			connections.PUT("/:id", handlers.Connection.UpdateConnection)
 			connections.DELETE("/:id", handlers.Connection.DeleteConnection)
-			connections.POST("/search", handlers.Connection.ListConnectionsByFilter)
+			connections.POST("/search", handlers.Connection.QueryConnections)
 		}
 
 		// Costsheet routes
 		costsheets := v1Private.Group("/costs")
 		{
-			costsheets.POST("/search", handlers.Costsheet.ListCostsheetByFilter)
+			costsheets.POST("/search", handlers.Costsheet.QueryCostsheets)
 			costsheets.POST("", handlers.Costsheet.CreateCostsheet)
 			costsheets.GET("/:id", handlers.Costsheet.GetCostsheet)
 			costsheets.PUT("/:id", handlers.Costsheet.UpdateCostsheet)
@@ -459,24 +506,22 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 			creditNotes.POST("/:id/finalize", handlers.CreditNote.FinalizeCreditNote)
 		}
 
-		// Entity Integration Mapping routes
-		entityIntegrationMappings := v1Private.Group("/entity-integration-mappings")
+		// Integration routes
+		integrations := v1Private.Group("/integrations")
 		{
-			entityIntegrationMappings.POST("", handlers.EntityIntegrationMapping.CreateEntityIntegrationMapping)
-			entityIntegrationMappings.GET("", handlers.EntityIntegrationMapping.ListEntityIntegrationMappings)
-			entityIntegrationMappings.GET("/:id", handlers.EntityIntegrationMapping.GetEntityIntegrationMapping)
-			entityIntegrationMappings.DELETE("/:id", handlers.EntityIntegrationMapping.DeleteEntityIntegrationMapping)
+			integrations.POST("/link", handlers.Integration.Link)
+			integrations.POST("/sync", handlers.Integration.Sync)
 		}
 
 		// Coupon routes
 		coupon := v1Private.Group("/coupons")
 		{
 			coupon.POST("", handlers.Coupon.CreateCoupon)
-			coupon.GET("", handlers.Coupon.ListCouponsByFilter)
+			coupon.GET("", handlers.Coupon.ListCoupons)
 			coupon.GET("/:id", handlers.Coupon.GetCoupon)
 			coupon.PUT("/:id", handlers.Coupon.UpdateCoupon)
 			coupon.DELETE("/:id", handlers.Coupon.DeleteCoupon)
-			coupon.POST("/search", handlers.Coupon.ListCouponsByFilter)
+			coupon.POST("/search", handlers.Coupon.QueryCoupons)
 		}
 
 		// Admin routes (API Key only)
@@ -484,6 +529,15 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		adminRoutes.Use(middleware.APIKeyAuthMiddleware(cfg, secretService, logger))
 		{
 			// All admin routes to go here
+		}
+
+		// AI helpers (authenticated; same middleware as other /v1 private routes)
+		aiRoutes := v1Private.Group("/ai")
+		{
+			aiPricing := aiRoutes.Group("/pricing")
+			{
+				aiPricing.POST("/parse-gemini", handlers.AIPricing.ParseGeminiPricing)
+			}
 		}
 
 		// Portal routes (UI-specific endpoints)
@@ -500,6 +554,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		webhookGroup := v1Private.Group("/webhooks")
 		{
 			webhookGroup.GET("/dashboard", handlers.Webhook.GetDashboardURL)
+			webhookGroup.POST("/retry", handlers.Webhook.RetryOutboundWebhook)
 		}
 	}
 
@@ -527,6 +582,9 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		customerPortalAPI.GET("/wallets/:id", handlers.CustomerPortal.GetWallet)
 		customerPortalAPI.GET("/wallets/:id/transactions", handlers.CustomerPortal.GetWalletTransactions)
 
+		// Portal config (theme, sections, tabs)
+		customerPortalAPI.GET("/config", handlers.CustomerPortal.GetPortalConfig)
+
 		// Analytics
 		customerPortalAPI.POST("/analytics/revenue", handlers.CustomerPortal.GetAnalytics)
 
@@ -550,38 +608,36 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 		webhooks.POST("/quickbooks/:tenant_id/:environment_id", handlers.Webhook.HandleQuickBooksWebhook)
 		// Nomod webhook endpoint: POST /v1/webhooks/nomod/{tenant_id}/{environment_id}
 		webhooks.POST("/nomod/:tenant_id/:environment_id", handlers.Webhook.HandleNomodWebhook)
+		// Moyasar webhook endpoint: POST /v1/webhooks/moyasar/{tenant_id}/{environment_id}
+		webhooks.POST("/moyasar/:tenant_id/:environment_id", handlers.Webhook.HandleMoyasarWebhook)
+		// Paddle webhook endpoint: POST /v1/webhooks/paddle/{tenant_id}/{environment_id}
+		webhooks.POST("/paddle/:tenant_id/:environment_id", handlers.Webhook.HandlePaddleWebhook)
+		// Zoho Books webhook endpoint: POST /v1/webhooks/zoho_books/{tenant_id}/{environment_id}
+		webhooks.POST("/zoho_books/:tenant_id/:environment_id", handlers.Webhook.HandleZohoBooksWebhook)
 	}
 
-	// Cron routes
-	// TODO: move crons out of API based architecture
+	// HTTP cron: optional manual/legacy triggers (deprecated for automation; Temporal workers ensure server schedules on startup).
 	cron := v1Private.Group("/cron")
-	// Subscription related cron jobs
 	subscriptionGroup := cron.Group("/subscriptions")
 	{
 		subscriptionGroup.POST("/update-periods", handlers.CronSubscription.UpdateBillingPeriods)
+		// Deprecated: automation uses Temporal schedule subscription-trial-end-due.
+		subscriptionGroup.POST("/process-trial-end-due", handlers.CronSubscription.ProcessTrialEndDue)
 		subscriptionGroup.POST("/process-auto-cancellation", handlers.CronSubscription.ProcessAutoCancellationSubscriptions)
 		subscriptionGroup.POST("/renewal-due-alerts", handlers.CronSubscription.ProcessSubscriptionRenewalDueAlerts)
 	}
-
-	// Wallet related cron jobs
 	walletGroup := cron.Group("/wallets")
 	{
 		walletGroup.POST("/expire-credits", handlers.CronWallet.ExpireCredits)
-		walletGroup.POST("/check-alerts", handlers.CronWallet.CheckAlerts)
 	}
-
-	// Credit grant related cron jobs
 	creditGrantGroup := cron.Group("/creditgrants")
 	{
 		creditGrantGroup.POST("/process-scheduled-applications", handlers.CronCreditGrant.ProcessScheduledCreditGrantApplications)
 	}
-
-	// Invoice related cron jobs
 	invoiceGroup := cron.Group("/invoices")
 	{
 		invoiceGroup.POST("/void-old-pending", handlers.CronInvoice.VoidOldPendingInvoices)
 	}
-	// Kafka lag monitoring related cron jobs
 	kafkaLagMonitoringGroup := cron.Group("/events")
 	{
 		kafkaLagMonitoringGroup.POST("/monitoring", handlers.CronKafkaLagMonitoring.HandleKafkaLagMonitoring)
@@ -599,7 +655,7 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 	alert := v1Private.Group("/alerts")
 	{
 		// list alert logs by filter
-		alert.POST("/search", handlers.AlertLogsHandler.ListAlertLogsByFilter)
+		alert.POST("/search", handlers.AlertLogsHandler.QueryAlertLogs)
 	}
 
 	// RBAC routes
@@ -614,6 +670,23 @@ func NewRouter(handlers Handlers, cfg *config.Configuration, logger *logger.Logg
 	{
 		oauth.POST("/init", handlers.OAuth.InitiateOAuth)
 		oauth.POST("/complete", handlers.OAuth.CompleteOAuth)
+	}
+
+	// Dashboard routes
+	dashboardRoutes := v1Private.Group("/dashboard")
+	{
+		dashboardRoutes.POST("/revenues", handlers.Dashboard.GetRevenues)
+		dashboardRoutes.POST("/revenue-dashboard", handlers.Dashboard.GetRevenueDashboard)
+	}
+
+	// Workflow monitoring routes
+	workflows := v1Private.Group("/workflows")
+	{
+		workflows.POST("/search", handlers.Workflow.QueryWorkflows)
+		workflows.POST("/batch", handlers.Workflow.GetWorkflowsBatch)
+		workflows.GET("/:workflow_id/:run_id/summary", handlers.Workflow.GetWorkflowSummary)
+		workflows.GET("/:workflow_id/:run_id/timeline", handlers.Workflow.GetWorkflowTimeline)
+		workflows.GET("/:workflow_id/:run_id", handlers.Workflow.GetWorkflowDetails)
 	}
 
 	return router

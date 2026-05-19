@@ -14,7 +14,7 @@ type Repository interface {
 	List(ctx context.Context, filter *types.SubscriptionFilter) ([]*Subscription, error)
 	Count(ctx context.Context, filter *types.SubscriptionFilter) (int, error)
 	ListAll(ctx context.Context, filter *types.SubscriptionFilter) ([]*Subscription, error)
-	ListAllTenant(ctx context.Context, filter *types.SubscriptionFilter) ([]*Subscription, error)
+	GetSubscriptionsForBillingPeriodUpdate(ctx context.Context, filter *types.SubscriptionFilter) ([]*Subscription, error)
 	CreateWithLineItems(ctx context.Context, subscription *Subscription, items []*SubscriptionLineItem) error
 	GetWithLineItems(ctx context.Context, id string) (*Subscription, []*SubscriptionLineItem, error)
 	ListByCustomerID(ctx context.Context, customerID string) ([]*Subscription, error)
@@ -28,4 +28,11 @@ type Repository interface {
 
 	// Renewal due alert methods
 	ListSubscriptionsDueForRenewal(ctx context.Context) ([]*Subscription, error)
+
+	// Dashboard methods
+	GetRecentSubscriptionsByPlan(ctx context.Context) ([]types.SubscriptionPlanCount, error)
+
+	// GetSubscriptionsWithAutoInvoiceThreshold returns active, published subscriptions (paginated)
+	// where auto_invoice_threshold is set on the subscription (non-nil and > 0).
+	GetSubscriptionsWithAutoInvoiceThreshold(ctx context.Context, limit, offset int) ([]*Subscription, error)
 }

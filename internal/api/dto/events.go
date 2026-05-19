@@ -1,16 +1,21 @@
 package dto
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/domain/addon"
+	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/events"
 	"github.com/flexprice/flexprice/internal/domain/feature"
+	"github.com/flexprice/flexprice/internal/domain/group"
 	"github.com/flexprice/flexprice/internal/domain/meter"
 	"github.com/flexprice/flexprice/internal/domain/plan"
+	"github.com/flexprice/flexprice/internal/domain/price"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
@@ -41,6 +46,36 @@ func (r *BulkIngestEventRequest) Validate() error {
 	return validator.ValidateRequest(r)
 }
 
+// BulkIngestRawEventRequest is the request body for POST /v1/events/raw/bulk.
+// Each element in Events is a raw Bento-format event JSON object — the same
+// format that the Bento collector writes to the raw_events Kafka topic.
+type BulkIngestRawEventRequest struct {
+	Events []json.RawMessage `json:"events" validate:"required,min=1,max=1000"`
+}
+
+func (r *BulkIngestRawEventRequest) Validate() error {
+	if len(r.Events) == 0 {
+		return ierr.NewError("events is required").
+			WithHint("Provide at least one raw event").
+			Mark(ierr.ErrValidation)
+	}
+	if len(r.Events) > 1000 {
+		return ierr.NewError("too many events").
+			WithHint("Maximum 1000 events per batch").
+			Mark(ierr.ErrValidation)
+	}
+	// Ensure every element is a JSON object — reject nulls, arrays, strings, etc.
+	for i, raw := range r.Events {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return ierr.NewErrorf("events[%d] is not a JSON object", i).
+				WithHint("Each event must be a JSON object {}").
+				Mark(ierr.ErrValidation)
+		}
+	}
+	return nil
+}
+
 func (r *IngestEventRequest) ToEvent(ctx context.Context) *events.Event {
 	return events.NewEvent(
 		r.EventName,
@@ -56,19 +91,20 @@ func (r *IngestEventRequest) ToEvent(ctx context.Context) *events.Event {
 }
 
 type GetUsageRequest struct {
-	ExternalCustomerID string                `form:"external_customer_id" json:"external_customer_id" example:"customer456"`
-	CustomerID         string                `form:"customer_id" json:"customer_id" example:"customer456"`
-	EventName          string                `form:"event_name" json:"event_name" binding:"required" required:"true" example:"api_request"`
-	PropertyName       string                `form:"property_name" json:"property_name" example:"request_size"` // will be empty/ignored in case of COUNT
-	AggregationType    types.AggregationType `form:"aggregation_type" json:"aggregation_type" binding:"required"`
-	StartTime          time.Time             `form:"start_time" json:"start_time" example:"2024-03-13T00:00:00Z"`
-	EndTime            time.Time             `form:"end_time" json:"end_time" example:"2024-03-20T00:00:00Z"`
-	WindowSize         types.WindowSize      `form:"window_size" json:"window_size"`
-	BucketSize         types.WindowSize      `form:"bucket_size" json:"bucket_size,omitempty" example:"HOUR"` // Optional, only used for MAX aggregation with windowing
-	Filters            map[string][]string   `form:"filters,omitempty" json:"filters,omitempty"`
-	PriceID            string                `form:"-" json:"-"` // this is just for internal use to store the price id
-	MeterID            string                `form:"-" json:"-"` // this is just for internal use to store the meter id
-	Multiplier         *decimal.Decimal      `form:"multiplier" json:"multiplier,omitempty" swaggertype:"string"`
+	ExternalCustomerID  string                `form:"external_customer_id" json:"external_customer_id" example:"customer456"`
+	ExternalCustomerIDs []string              `form:"-" json:"-" example:"customer456,customer789"`
+	CustomerID          string                `form:"customer_id" json:"customer_id" example:"customer456"`
+	EventName           string                `form:"event_name" json:"event_name" binding:"required" required:"true" example:"api_request"`
+	PropertyName        string                `form:"property_name" json:"property_name" example:"request_size"` // will be empty/ignored in case of COUNT
+	AggregationType     types.AggregationType `form:"aggregation_type" json:"aggregation_type" binding:"required"`
+	StartTime           time.Time             `form:"start_time" json:"start_time" example:"2024-03-13T00:00:00Z"`
+	EndTime             time.Time             `form:"end_time" json:"end_time" example:"2024-03-20T00:00:00Z"`
+	WindowSize          types.WindowSize      `form:"window_size" json:"window_size"`
+	BucketSize          types.WindowSize      `form:"bucket_size" json:"bucket_size,omitempty" example:"HOUR"` // Optional, only used for MAX aggregation with windowing
+	Filters             map[string][]string   `form:"filters,omitempty" json:"filters,omitempty"`
+	PriceID             string                `form:"-" json:"-"` // this is just for internal use to store the price id
+	MeterID             string                `form:"-" json:"-"` // this is just for internal use to store the meter id
+	Multiplier          *decimal.Decimal      `form:"multiplier" json:"multiplier,omitempty" swaggertype:"string"`
 	// BillingAnchor enables custom monthly billing periods for usage aggregation.
 	//
 	// When to use:
@@ -85,19 +121,24 @@ type GetUsageRequest struct {
 	// - "2024-01-15T00:00:00Z" (15th of each month at midnight)
 	// - "2024-02-29T12:00:00Z" (29th of each month at noon - handles leap years)
 	BillingAnchor *time.Time `form:"billing_anchor" json:"billing_anchor,omitempty" example:"2024-03-05T14:30:45.123456789Z"`
+	// GroupByProperty is the property name in event.properties to group by before aggregating.
+	// When set, aggregation is applied per unique value of this property within each bucket,
+	// then the per-group results are summed to produce the bucket total.
+	GroupByProperty string `form:"group_by_property" json:"group_by_property,omitempty"`
 }
 
 type GetUsageByMeterRequest struct {
-	MeterID            string              `form:"meter_id" json:"meter_id" binding:"required" example:"123"`
-	PriceID            string              `form:"-" json:"-"` // this is just for internal use to store the price id
-	Meter              *meter.Meter        `form:"-" json:"-"` // caller can set this in case already fetched from db to avoid extra db call
-	ExternalCustomerID string              `form:"external_customer_id" json:"external_customer_id" example:"user_5"`
-	CustomerID         string              `form:"customer_id" json:"customer_id" example:"customer456"`
-	StartTime          time.Time           `form:"start_time" json:"start_time" example:"2024-11-09T00:00:00Z"`
-	EndTime            time.Time           `form:"end_time" json:"end_time" example:"2024-12-09T00:00:00Z"`
-	WindowSize         types.WindowSize    `form:"window_size" json:"window_size"`
-	BucketSize         types.WindowSize    `form:"bucket_size" json:"bucket_size,omitempty" example:"HOUR"` // Optional, only used for MAX aggregation with windowing
-	Filters            map[string][]string `form:"filters,omitempty" json:"filters,omitempty"`
+	MeterID             string              `form:"meter_id" json:"meter_id" binding:"required" example:"123"`
+	PriceID             string              `form:"-" json:"-"` // this is just for internal use to store the price id
+	Meter               *meter.Meter        `form:"-" json:"-"` // caller can set this in case already fetched from db to avoid extra db call
+	ExternalCustomerID  string              `form:"external_customer_id" json:"external_customer_id" example:"user_5"`
+	ExternalCustomerIDs []string            `form:"-" json:"-" example:"user_5,user_6"`
+	CustomerID          string              `form:"customer_id" json:"customer_id" example:"customer456"`
+	StartTime           time.Time           `form:"start_time" json:"start_time" example:"2024-11-09T00:00:00Z"`
+	EndTime             time.Time           `form:"end_time" json:"end_time" example:"2024-12-09T00:00:00Z"`
+	WindowSize          types.WindowSize    `form:"window_size" json:"window_size"`
+	BucketSize          types.WindowSize    `form:"bucket_size" json:"bucket_size,omitempty" example:"HOUR"` // Optional, only used for MAX aggregation with windowing
+	Filters             map[string][]string `form:"filters,omitempty" json:"filters,omitempty"`
 	// BillingAnchor enables custom monthly billing periods for meter usage aggregation.
 	//
 	// Usage guidelines:
@@ -216,18 +257,20 @@ func (r *GetUsageRequest) ToUsageParams() *events.UsageParams {
 	}
 
 	return &events.UsageParams{
-		ExternalCustomerID: r.ExternalCustomerID,
-		CustomerID:         r.CustomerID,
-		EventName:          r.EventName,
-		PropertyName:       r.PropertyName,
-		AggregationType:    types.AggregationType(strings.ToUpper(string(r.AggregationType))),
-		StartTime:          r.StartTime,
-		EndTime:            r.EndTime,
-		WindowSize:         r.WindowSize,
-		BucketSize:         r.BucketSize,
-		Filters:            r.Filters,
-		Multiplier:         r.Multiplier,
-		BillingAnchor:      r.BillingAnchor,
+		ExternalCustomerID:  r.ExternalCustomerID,
+		ExternalCustomerIDs: r.ExternalCustomerIDs,
+		CustomerID:          r.CustomerID,
+		EventName:           r.EventName,
+		PropertyName:        r.PropertyName,
+		AggregationType:     types.AggregationType(strings.ToUpper(string(r.AggregationType))),
+		StartTime:           r.StartTime,
+		EndTime:             r.EndTime,
+		WindowSize:          r.WindowSize,
+		BucketSize:          r.BucketSize,
+		Filters:             r.Filters,
+		Multiplier:          r.Multiplier,
+		BillingAnchor:       r.BillingAnchor,
+		GroupByProperty:     r.GroupByProperty,
 	}
 }
 
@@ -276,23 +319,34 @@ func (r *GetEventsRequest) Validate() error {
 }
 
 type GetUsageAnalyticsRequest struct {
-	ExternalCustomerID string           `json:"external_customer_id" binding:"required"`
-	FeatureIDs         []string         `json:"feature_ids,omitempty"`
-	Sources            []string         `json:"sources,omitempty"`
-	StartTime          time.Time        `json:"start_time,omitempty"`
-	EndTime            time.Time        `json:"end_time,omitempty"`
-	GroupBy            []string         `json:"group_by,omitempty"` // allowed values: "source", "feature_id", "properties.<field_name>"
-	WindowSize         types.WindowSize `json:"window_size,omitempty"`
-	Expand             []string         `json:"expand,omitempty"` // allowed values: "price", "meter", "feature", "subscription_line_item","plan","addon"
+	// ExternalCustomerID is the single external customer ID.
+	// Optional when ExternalCustomerIDs is provided; required otherwise.
+	ExternalCustomerID string `json:"external_customer_id"`
+	// ExternalCustomerIDs is a list of external customer IDs whose usage will be merged
+	// into a single aggregated response. Unioned with ExternalCustomerID if both are set;
+	// duplicates are dropped. At least one of ExternalCustomerID or ExternalCustomerIDs
+	// must be provided.
+	ExternalCustomerIDs []string         `form:"-" json:"-" example:"user_5,user_6"`
+	FeatureIDs          []string         `json:"feature_ids,omitempty"`
+	Sources             []string         `json:"sources,omitempty"`
+	StartTime           time.Time        `json:"start_time,omitempty"`
+	EndTime             time.Time        `json:"end_time,omitempty"`
+	GroupBy             []string         `json:"group_by,omitempty"` // allowed values: "source", "feature_id", "properties.<field_name>"
+	WindowSize          types.WindowSize `json:"window_size,omitempty"`
+	Expand              []string         `json:"expand,omitempty"` // allowed values: "price", "meter", "feature", "subscription_line_item","plan","addon"
 	// Property filters to filter the events by the keys in `properties` field of the event
 	PropertyFilters map[string][]string `json:"property_filters,omitempty"`
+	// IncludeChildren when true folds child customers' usage into the single aggregated total.
+	// Default: false.
+	IncludeChildren bool `json:"include_children,omitempty"`
 }
 
 // GetUsageAnalyticsResponse represents the response for the usage analytics API
 type GetUsageAnalyticsResponse struct {
-	TotalCost decimal.Decimal     `json:"total_cost" swaggertype:"string"`
-	Currency  string              `json:"currency"`
-	Items     []UsageAnalyticItem `json:"items"`
+	TotalCost       decimal.Decimal      `json:"total_cost" swaggertype:"string"`
+	Currency        string               `json:"currency"`
+	Items           []UsageAnalyticItem  `json:"items"`
+	CustomAnalytics []CustomAnalyticItem `json:"custom_analytics,omitempty"`
 }
 
 // UsageAnalyticItem represents a single analytic item in the response
@@ -316,6 +370,8 @@ type UsageAnalyticItem struct {
 	UnitPlural           string                             `json:"unit_plural,omitempty"`
 	AggregationType      types.AggregationType              `json:"aggregation_type,omitempty"`
 	TotalUsage           decimal.Decimal                    `json:"total_usage" swaggertype:"string"`
+	TotalUsageDisplay    string                             `json:"total_usage_display"`      // Empty string when feature has no reporting unit; otherwise the value in reporting units
+	ReportingUnit        *types.ReportingUnit               `json:"reporting_unit,omitempty"` // Present when total_usage_display is set (unit_singular, unit_plural, conversion_rate)
 	TotalCost            decimal.Decimal                    `json:"total_cost" swaggertype:"string"`
 	Currency             string                             `json:"currency,omitempty"`
 	EventCount           uint64                             `json:"event_count"`          // Number of events that contributed to this aggregation
@@ -325,6 +381,16 @@ type UsageAnalyticItem struct {
 	AddOnID              string                             `json:"add_on_id,omitempty"`
 	PlanID               string                             `json:"plan_id,omitempty"`
 	WindowSize           types.WindowSize                   `json:"window_size,omitempty"` // Window size for bucketed meters (only set if meter is bucketed)
+	Group                *group.Group                       `json:"group,omitempty"`       // Group when the feature belongs to a group (object includes id)
+}
+
+// CustomAnalyticItem represents a custom analytics calculation result
+type CustomAnalyticItem struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`         // Calculation name (e.g., "Revenue per Minute")
+	FeatureName string          `json:"feature_name"` // Name of the feature this applies to
+	Value       decimal.Decimal `json:"value" swaggertype:"string"`
+	Type        string          `json:"type"` // "feature", "meter", "event_name"
 }
 
 // UsageAnalyticPoint represents a point in the time series data
@@ -387,4 +453,229 @@ type EventCostInfo struct {
 
 type GetHuggingFaceBillingDataResponse struct {
 	Data []EventCostInfo `json:"requests"`
+}
+
+type GetEventByIDResponse struct {
+	Event           *Event                          `json:"event"`
+	Status          types.EventProcessingStatusType `json:"status"`
+	ProcessedEvents []*FeatureUsageInfo             `json:"processed_events,omitempty"`
+	DebugTracker    *DebugTracker                   `json:"debug_tracker,omitempty"`
+}
+
+type FeatureUsageInfo struct {
+	CustomerID     string    `json:"customer_id"`
+	SubscriptionID string    `json:"subscription_id"`
+	SubLineItemID  string    `json:"sub_line_item_id"`
+	PriceID        string    `json:"price_id"`
+	MeterID        string    `json:"meter_id"`
+	FeatureID      string    `json:"feature_id"`
+	QtyTotal       string    `json:"qty_total"`
+	ProcessedAt    time.Time `json:"processed_at"`
+}
+
+type DebugTracker struct {
+	CustomerLookup             *CustomerLookupResult             `json:"customer_lookup"`
+	MeterMatching              *MeterMatchingResult              `json:"meter_matching"`
+	PriceLookup                *PriceLookupResult                `json:"price_lookup"`
+	SubscriptionLineItemLookup *SubscriptionLineItemLookupResult `json:"subscription_line_item_lookup"`
+	FailurePoint               *types.FailurePoint               `json:"failure_point"`
+}
+
+type CustomerLookupResult struct {
+	Status   types.DebugTrackerStatus `json:"status"`
+	Customer *customer.Customer       `json:"customer,omitempty"`
+	Error    *ierr.ErrorResponse      `json:"error,omitempty"`
+}
+
+type MeterMatchingResult struct {
+	Status        types.DebugTrackerStatus `json:"status"`
+	MatchedMeters []MatchedMeter           `json:"matched_meters,omitempty"`
+	Error         *ierr.ErrorResponse      `json:"error,omitempty"`
+}
+
+type MatchedMeter struct {
+	MeterID   string       `json:"meter_id"`
+	EventName string       `json:"event_name"`
+	Meter     *meter.Meter `json:"meter"`
+}
+
+type PriceLookupResult struct {
+	Status        types.DebugTrackerStatus `json:"status"`
+	MatchedPrices []MatchedPrice           `json:"matched_prices,omitempty"`
+	Error         *ierr.ErrorResponse      `json:"error,omitempty"`
+}
+
+type MatchedPrice struct {
+	PriceID string       `json:"price_id"`
+	MeterID string       `json:"meter_id"`
+	Status  string       `json:"status"`
+	Price   *price.Price `json:"price"`
+}
+
+type SubscriptionLineItemLookupResult struct {
+	Status           types.DebugTrackerStatus      `json:"status"`
+	MatchedLineItems []MatchedSubscriptionLineItem `json:"matched_line_items,omitempty"`
+	Error            *ierr.ErrorResponse           `json:"error,omitempty"`
+}
+
+type MatchedSubscriptionLineItem struct {
+	SubLineItemID        string                             `json:"sub_line_item_id"`
+	SubscriptionID       string                             `json:"subscription_id"`
+	PriceID              string                             `json:"price_id"`
+	StartDate            time.Time                          `json:"start_date"`
+	EndDate              time.Time                          `json:"end_date"`
+	IsActiveForEvent     bool                               `json:"is_active_for_event"`
+	TimestampWithinRange bool                               `json:"timestamp_within_range"`
+	SubscriptionLineItem *subscription.SubscriptionLineItem `json:"subscription_line_item,omitempty"`
+}
+
+// ReprocessEventsRequest represents the request to reprocess events
+type ReprocessEventsRequest struct {
+	ExternalCustomerID string `json:"external_customer_id" validate:"required" binding:"required" example:"customer456"`
+	EventName          string `json:"event_name" example:"api_request"`
+	StartDate          string `json:"start_date" validate:"required" binding:"required" example:"2024-01-01T00:00:00Z"`
+	EndDate            string `json:"end_date" validate:"required" binding:"required" example:"2024-01-31T23:59:59Z"`
+	BatchSize          int    `json:"batch_size" example:"100"`
+}
+
+// Validate validates the reprocess events request
+func (r *ReprocessEventsRequest) Validate() error {
+	if err := validator.ValidateRequest(r); err != nil {
+		return err
+	}
+
+	// Validate date format (RFC3339)
+	parsedStartDate, err := time.Parse(time.RFC3339, r.StartDate)
+	if err != nil {
+		return ierr.NewError("invalid start_date format").
+			WithHint("Start date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	parsedEndDate, err := time.Parse(time.RFC3339, r.EndDate)
+	if err != nil {
+		return ierr.NewError("invalid end_date format").
+			WithHint("End date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Parse dates to validate start_date < end_date
+	startDate := parsedStartDate
+	endDate := parsedEndDate
+
+	if startDate.After(endDate) {
+		return ierr.NewError("start_date must be before end_date").
+			WithHint("Start date must be before end date").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Validate batch size (default to 100 if not provided or invalid)
+	if r.BatchSize <= 0 {
+		r.BatchSize = 100 // Default batch size
+	}
+
+	return nil
+}
+
+// InternalReprocessEventsRequest represents the request to reprocess events (internal - no external_customer_id required)
+type InternalReprocessEventsRequest struct {
+	ExternalCustomerID string `json:"external_customer_id" example:"customer456"`
+	EventName          string `json:"event_name" example:"api_request"`
+	StartDate          string `json:"start_date" validate:"required" binding:"required" example:"2024-01-01T00:00:00Z"`
+	EndDate            string `json:"end_date" validate:"required" binding:"required" example:"2024-01-31T23:59:59Z"`
+	BatchSize          int    `json:"batch_size" example:"100"`
+}
+
+// Validate validates the internal reprocess events request
+func (r *InternalReprocessEventsRequest) Validate() error {
+	if err := validator.ValidateRequest(r); err != nil {
+		return err
+	}
+
+	// Validate date format (RFC3339)
+	parsedStartDate, err := time.Parse(time.RFC3339, r.StartDate)
+	if err != nil {
+		return ierr.NewError("invalid start_date format").
+			WithHint("Start date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	parsedEndDate, err := time.Parse(time.RFC3339, r.EndDate)
+	if err != nil {
+		return ierr.NewError("invalid end_date format").
+			WithHint("End date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Parse dates to validate start_date < end_date
+	startDate := parsedStartDate
+	endDate := parsedEndDate
+
+	if startDate.After(endDate) {
+		return ierr.NewError("start_date must be before end_date").
+			WithHint("Start date must be before end date").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Validate batch size (default to 100 if not provided or invalid)
+	if r.BatchSize <= 0 {
+		r.BatchSize = 100 // Default batch size
+	}
+
+	return nil
+}
+
+// ReprocessRawEventsRequest represents the request to reprocess raw events
+type ReprocessRawEventsRequest struct {
+	ExternalCustomerIDs []string `json:"external_customer_ids" example:"[\"customer456\",\"customer789\"]"`
+	EventNames          []string `json:"event_names" example:"[\"api_request\",\"page_view\"]"`
+	StartDate           string   `json:"start_date" validate:"required" binding:"required" example:"2024-01-01T00:00:00Z"`
+	EndDate             string   `json:"end_date" example:"2024-01-31T23:59:59Z"` // Optional - defaults to current time
+	BatchSize           int      `json:"batch_size" example:"1000"`
+	EventIDs            []string `json:"event_ids" example:"[\"evt_123\",\"evt_456\"]"`
+}
+
+// Validate validates the reprocess raw events request
+func (r *ReprocessRawEventsRequest) Validate() error {
+	if err := validator.ValidateRequest(r); err != nil {
+		return err
+	}
+
+	// Validate start_date format (RFC3339)
+	parsedStartDate, err := time.Parse(time.RFC3339, r.StartDate)
+	if err != nil {
+		return ierr.NewError("invalid start_date format").
+			WithHint("Start date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	// If end_date is not provided, default to current time
+	if r.EndDate == "" {
+		r.EndDate = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	// Validate end_date format (RFC3339)
+	parsedEndDate, err := time.Parse(time.RFC3339, r.EndDate)
+	if err != nil {
+		return ierr.NewError("invalid end_date format").
+			WithHint("End date must be in RFC3339 format (e.g., 2006-01-02T15:04:05Z07:00)").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Validate start_date < end_date
+	startDate := parsedStartDate
+	endDate := parsedEndDate
+
+	if startDate.After(endDate) {
+		return ierr.NewError("start_date must be before end_date").
+			WithHint("Start date must be before end date").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Validate batch size (default to 1000 if not provided or invalid)
+	if r.BatchSize <= 0 {
+		r.BatchSize = 1000 // Default batch size
+	}
+
+	return nil
 }

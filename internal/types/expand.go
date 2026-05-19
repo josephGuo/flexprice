@@ -12,31 +12,33 @@ type ExpandableField string
 
 // Common expandable fields
 const (
-	ExpandPrices             ExpandableField = "prices"
-	ExpandPlan               ExpandableField = "plan"
-	ExpandMeters             ExpandableField = "meters"
-	ExpandFeatures           ExpandableField = "features"
-	ExpandPlans              ExpandableField = "plans"
-	ExpandEntitlements       ExpandableField = "entitlements"
-	ExpandSchedule           ExpandableField = "schedule"
-	ExpandInvoice            ExpandableField = "invoice"
-	ExpandSubscription       ExpandableField = "subscription"
-	ExpandCustomer           ExpandableField = "customer"
-	ExpandCreditNote         ExpandableField = "credit_note"
-	ExpandCreditGrant        ExpandableField = "credit_grant"
-	ExpandTaxApplied         ExpandableField = "tax_applied"
-	ExpandTaxRate            ExpandableField = "tax_rate"
-	ExpandTaxAssociation     ExpandableField = "tax_association"
-	ExpandCoupon             ExpandableField = "coupon"
-	ExpandCouponApplications ExpandableField = "coupon_applications"
-	ExpandPriceUnit          ExpandableField = "priceunit"
-	ExpandCouponAssociations ExpandableField = "coupon_associations"
-	ExpandAddons             ExpandableField = "addons"
-	ExpandGroups             ExpandableField = "groups"
-	ExpandWallet             ExpandableField = "wallet"
-	ExpandFeature            ExpandableField = "feature"
-	ExpandParentCustomer     ExpandableField = "parent_customer"
-	ExpandCreatedByUser      ExpandableField = "created_by_user"
+	ExpandPrices                    ExpandableField = "prices"
+	ExpandPlan                      ExpandableField = "plan"
+	ExpandMeters                    ExpandableField = "meters"
+	ExpandFeatures                  ExpandableField = "features"
+	ExpandPlans                     ExpandableField = "plans"
+	ExpandEntitlements              ExpandableField = "entitlements"
+	ExpandSchedule                  ExpandableField = "schedule"
+	ExpandInvoice                   ExpandableField = "invoice"
+	ExpandSubscription              ExpandableField = "subscription"
+	ExpandCustomer                  ExpandableField = "customer"
+	ExpandCreditNote                ExpandableField = "credit_note"
+	ExpandCreditGrant               ExpandableField = "credit_grant"
+	ExpandTaxApplied                ExpandableField = "tax_applied"
+	ExpandTaxRate                   ExpandableField = "tax_rate"
+	ExpandTaxAssociation            ExpandableField = "tax_association"
+	ExpandCoupon                    ExpandableField = "coupon"
+	ExpandCouponApplications        ExpandableField = "coupon_applications"
+	ExpandPriceUnit                 ExpandableField = "priceunit"
+	ExpandCouponAssociations        ExpandableField = "coupon_associations"
+	ExpandAddons                    ExpandableField = "addons"
+	ExpandGroups                    ExpandableField = "groups"
+	ExpandWallet                    ExpandableField = "wallet"
+	ExpandFeature                   ExpandableField = "feature"
+	ExpandCreatedByUser             ExpandableField = "created_by_user"
+	ExpandCreditsAvailableBreakdown ExpandableField = "credits_available_breakdown"
+	ExpandSubscriptionLineItems     ExpandableField = "subscription_line_items"
+	ExpandIntegrations              ExpandableField = "integrations"
 )
 
 // ExpandConfig defines which fields can be expanded and their nested expansions
@@ -74,13 +76,14 @@ var (
 
 	// SubscriptionExpandConfig defines what can be expanded on a subscription
 	SubscriptionExpandConfig = ExpandConfig{
-		AllowedFields: []ExpandableField{ExpandPlan, ExpandCustomer, ExpandPrices, ExpandMeters, ExpandSchedule, ExpandCouponAssociations, ExpandCoupon},
+		AllowedFields: []ExpandableField{ExpandPlan, ExpandCustomer, ExpandPrices, ExpandMeters, ExpandSchedule, ExpandCouponAssociations, ExpandCoupon, ExpandSubscriptionLineItems},
 		NestedExpands: map[ExpandableField][]ExpandableField{
-			ExpandPlan:               {ExpandPrices},
-			ExpandCustomer:           {},
-			ExpandPrices:             {ExpandMeters},
-			ExpandSchedule:           {},
-			ExpandCouponAssociations: {ExpandCoupon},
+			ExpandPlan:                  {ExpandPrices},
+			ExpandCustomer:              {},
+			ExpandPrices:                {ExpandMeters},
+			ExpandSchedule:              {},
+			ExpandCouponAssociations:    {ExpandCoupon},
+			ExpandSubscriptionLineItems: {ExpandPrices},
 		},
 	}
 
@@ -139,9 +142,9 @@ var (
 
 	// CustomerExpandConfig defines what can be expanded on a customer
 	CustomerExpandConfig = ExpandConfig{
-		AllowedFields: []ExpandableField{ExpandParentCustomer},
+		AllowedFields: []ExpandableField{ExpandIntegrations},
 		NestedExpands: map[ExpandableField][]ExpandableField{
-			ExpandParentCustomer: {},
+			ExpandIntegrations: {},
 		},
 	}
 
@@ -155,11 +158,29 @@ var (
 		},
 	}
 
+	// WalletBalanceExpandConfig defines what can be expanded on a wallet balance response
+	WalletBalanceExpandConfig = ExpandConfig{
+		AllowedFields: []ExpandableField{ExpandCreditsAvailableBreakdown},
+		NestedExpands: map[ExpandableField][]ExpandableField{
+			ExpandCreditsAvailableBreakdown: {},
+		},
+	}
+
 	// AddonAssociationExpandConfig defines what can be expanded on an addon association
 	AddonAssociationExpandConfig = ExpandConfig{
 		AllowedFields: []ExpandableField{ExpandAddons, ExpandSubscription},
 		NestedExpands: map[ExpandableField][]ExpandableField{
 			ExpandAddons: {},
+		},
+	}
+
+	// SubscriptionLineItemListExpandConfig defines expands for listing subscription line items (collection APIs).
+	// Supports top-level prices (and nested price fields) and subscription_line_items.prices for parity with subscription expand strings.
+	SubscriptionLineItemListExpandConfig = ExpandConfig{
+		AllowedFields: []ExpandableField{ExpandPrices, ExpandSubscriptionLineItems},
+		NestedExpands: map[ExpandableField][]ExpandableField{
+			ExpandPrices:                {ExpandMeters, ExpandPriceUnit, ExpandPlan, ExpandAddons, ExpandGroups},
+			ExpandSubscriptionLineItems: {ExpandPrices},
 		},
 	}
 )

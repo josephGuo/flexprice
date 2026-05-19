@@ -290,6 +290,14 @@ func (_c *PriceCreate) SetBillingCadence(v types.BillingCadence) *PriceCreate {
 	return _c
 }
 
+// SetNillableBillingCadence sets the "billing_cadence" field if the given value is not nil.
+func (pc *PriceCreate) SetNillableBillingCadence(tc *types.BillingCadence) *PriceCreate {
+	if tc != nil {
+		pc.SetBillingCadence(*tc)
+	}
+	return pc
+}
+
 // SetInvoiceCadence sets the "invoice_cadence" field.
 func (_c *PriceCreate) SetInvoiceCadence(v types.InvoiceCadence) *PriceCreate {
 	_c.mutation.SetInvoiceCadence(v)
@@ -304,16 +312,16 @@ func (_c *PriceCreate) SetNillableInvoiceCadence(v *types.InvoiceCadence) *Price
 	return _c
 }
 
-// SetTrialPeriod sets the "trial_period" field.
-func (_c *PriceCreate) SetTrialPeriod(v int) *PriceCreate {
-	_c.mutation.SetTrialPeriod(v)
-	return _c
+// SetTrialPeriodDays sets the "trial_period_days" field.
+func (pc *PriceCreate) SetTrialPeriodDays(i int) *PriceCreate {
+	pc.mutation.SetTrialPeriodDays(i)
+	return pc
 }
 
-// SetNillableTrialPeriod sets the "trial_period" field if the given value is not nil.
-func (_c *PriceCreate) SetNillableTrialPeriod(v *int) *PriceCreate {
-	if v != nil {
-		_c.SetTrialPeriod(*v)
+// SetNillableTrialPeriodDays sets the "trial_period_days" field if the given value is not nil.
+func (_c *PriceCreate) SetNillableTrialPeriodDays(i *int) *PriceCreate {
+	if i != nil {
+		_c.SetTrialPeriodDays(*i)
 	}
 	return _c
 }
@@ -488,6 +496,12 @@ func (_c *PriceCreate) SetNillableGroupID(v *string) *PriceCreate {
 	return _c
 }
 
+// SetSequence sets the "sequence" field.
+func (pc *PriceCreate) SetSequence(i int64) *PriceCreate {
+	pc.mutation.SetSequence(i)
+	return pc
+}
+
 // SetID sets the "id" field.
 func (_c *PriceCreate) SetID(v string) *PriceCreate {
 	_c.mutation.SetID(v)
@@ -595,9 +609,13 @@ func (_c *PriceCreate) defaults() {
 		v := price.DefaultConversionRate
 		_c.mutation.SetConversionRate(v)
 	}
-	if _, ok := _c.mutation.TrialPeriod(); !ok {
-		v := price.DefaultTrialPeriod
-		_c.mutation.SetTrialPeriod(v)
+	if _, ok := _c.mutation.BillingCadence(); !ok {
+		v := price.DefaultBillingCadence
+		_c.mutation.SetBillingCadence(v)
+	}
+	if _, ok := _c.mutation.TrialPeriodDays(); !ok {
+		v := price.DefaultTrialPeriodDays
+		_c.mutation.SetTrialPeriodDays(v)
 	}
 	if _, ok := _c.mutation.EntityType(); !ok {
 		v := price.DefaultEntityType
@@ -697,8 +715,13 @@ func (_c *PriceCreate) check() error {
 			return &ValidationError{Name: "invoice_cadence", err: fmt.Errorf(`ent: validator failed for field "Price.invoice_cadence": %w`, err)}
 		}
 	}
-	if _, ok := _c.mutation.TrialPeriod(); !ok {
-		return &ValidationError{Name: "trial_period", err: errors.New(`ent: missing required field "Price.trial_period"`)}
+	if _, ok := _c.mutation.TrialPeriodDays(); !ok {
+		return &ValidationError{Name: "trial_period_days", err: errors.New(`ent: missing required field "Price.trial_period_days"`)}
+	}
+	if v, ok := _c.mutation.TrialPeriodDays(); ok {
+		if err := price.TrialPeriodDaysValidator(v); err != nil {
+			return &ValidationError{Name: "trial_period_days", err: fmt.Errorf(`ent: validator failed for field "Price.trial_period_days": %w`, err)}
+		}
 	}
 	if v, ok := _c.mutation.TierMode(); ok {
 		if err := v.Validate(); err != nil {
@@ -853,9 +876,9 @@ func (_c *PriceCreate) createSpec() (*Price, *sqlgraph.CreateSpec) {
 		_spec.SetField(price.FieldInvoiceCadence, field.TypeString, value)
 		_node.InvoiceCadence = value
 	}
-	if value, ok := _c.mutation.TrialPeriod(); ok {
-		_spec.SetField(price.FieldTrialPeriod, field.TypeInt, value)
-		_node.TrialPeriod = value
+	if value, ok := _c.mutation.TrialPeriodDays(); ok {
+		_spec.SetField(price.FieldTrialPeriodDays, field.TypeInt, value)
+		_node.TrialPeriodDays = value
 	}
 	if value, ok := _c.mutation.MeterID(); ok {
 		_spec.SetField(price.FieldMeterID, field.TypeString, value)
@@ -916,6 +939,10 @@ func (_c *PriceCreate) createSpec() (*Price, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.GroupID(); ok {
 		_spec.SetField(price.FieldGroupID, field.TypeString, value)
 		_node.GroupID = &value
+	}
+	if value, ok := _c.mutation.Sequence(); ok {
+		_spec.SetField(price.FieldSequence, field.TypeInt64, value)
+		_node.Sequence = value
 	}
 	if nodes := _c.mutation.CostsheetIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

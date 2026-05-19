@@ -5,14 +5,21 @@ import (
 	"time"
 
 	"github.com/flexprice/flexprice/ent"
+	"github.com/flexprice/flexprice/ent/predicate"
 	"github.com/flexprice/flexprice/ent/subscriptionlineitem"
 	"github.com/flexprice/flexprice/internal/cache"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
+	"github.com/flexprice/flexprice/internal/dsl"
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/postgres"
 	"github.com/flexprice/flexprice/internal/types"
 )
+
+// subscriptionLineItemBatchSize is the maximum number of line items to insert in a single
+// bulk operation. PostgreSQL limits the total number of parameters to 65535; batching
+// prevents hitting that ceiling when a subscription has many line items.
+const subscriptionLineItemBatchSize = 1000
 
 type subscriptionLineItemRepository struct {
 	client    postgres.IClient
@@ -32,7 +39,7 @@ func NewSubscriptionLineItemRepository(client postgres.IClient, log *logger.Logg
 }
 
 // applyActiveLineItemFilter applies the filter to ensure only active subscription line items are returned
-// Active line items are those where EndDate > currentPeriodStart or EndDate is nil
+// Active line items are those where EndDate is nil or EndDate >= reference (e.g. billing/usage window start).
 func (o *SubscriptionLineItemQueryOptions) applyActiveLineItemFilter(query *ent.SubscriptionLineItemQuery, currentPeriodStart *time.Time) *ent.SubscriptionLineItemQuery {
 	if currentPeriodStart == nil {
 		return query
@@ -41,7 +48,7 @@ func (o *SubscriptionLineItemQueryOptions) applyActiveLineItemFilter(query *ent.
 	return query.Where(
 		subscriptionlineitem.Status(string(types.StatusPublished)),
 		subscriptionlineitem.Or(
-			subscriptionlineitem.EndDateGT(*currentPeriodStart),
+			subscriptionlineitem.EndDateGTE(*currentPeriodStart),
 			subscriptionlineitem.EndDateIsNil(),
 		),
 	)
@@ -103,9 +110,16 @@ func (r *subscriptionLineItemRepository) Create(ctx context.Context, item *subsc
 		SetNillableStartDate(types.ToNillableTime(item.StartDate)).
 		SetNillableEndDate(types.ToNillableTime(item.EndDate)).
 		SetNillableSubscriptionPhaseID(item.SubscriptionPhaseID).
+		SetNillableAddonAssociationID(item.AddonAssociationID).
 		SetInvoiceCadence(item.InvoiceCadence).
-		SetTrialPeriod(item.TrialPeriod).
 		SetMetadata(item.Metadata).
+		// Commitment fields
+		SetNillableCommitmentAmount(item.CommitmentAmount).
+		SetNillableCommitmentQuantity(item.CommitmentQuantity).
+		SetNillableCommitmentType(types.ToNillableString(string(item.CommitmentType))).
+		SetNillableCommitmentOverageFactor(item.CommitmentOverageFactor).
+		SetCommitmentTrueUpEnabled(item.CommitmentTrueUpEnabled).
+		SetCommitmentWindowed(item.CommitmentWindowed).
 		SetTenantID(item.TenantID).
 		SetEnvironmentID(item.EnvironmentID).
 		SetStatus(string(item.Status)).
@@ -233,6 +247,13 @@ func (r *subscriptionLineItemRepository) Update(ctx context.Context, item *subsc
 		SetNillableStartDate(types.ToNillableTime(item.StartDate)).
 		SetNillableEndDate(types.ToNillableTime(item.EndDate)).
 		SetMetadata(item.Metadata).
+		// Commitment fields
+		SetNillableCommitmentAmount(item.CommitmentAmount).
+		SetNillableCommitmentQuantity(item.CommitmentQuantity).
+		SetNillableCommitmentType(types.ToNillableString(string(item.CommitmentType))).
+		SetNillableCommitmentOverageFactor(item.CommitmentOverageFactor).
+		SetCommitmentTrueUpEnabled(item.CommitmentTrueUpEnabled).
+		SetCommitmentWindowed(item.CommitmentWindowed).
 		SetStatus(string(item.Status)).
 		SetUpdatedBy(item.UpdatedBy).
 		SetUpdatedAt(time.Now()).
@@ -350,15 +371,14 @@ func (r *subscriptionLineItemRepository) CreateBulk(ctx context.Context, items [
 			SetCurrency(item.Currency).
 			SetBillingPeriod(item.BillingPeriod).
 			SetInvoiceCadence(item.InvoiceCadence).
-			SetTrialPeriod(item.TrialPeriod).
 			SetNillableStartDate(types.ToNillableTime(item.StartDate)).
 			SetNillableEndDate(types.ToNillableTime(item.EndDate)).
 			SetNillableSubscriptionPhaseID(item.SubscriptionPhaseID).
+			SetNillableAddonAssociationID(item.AddonAssociationID).
 			SetQuantity(item.Quantity).
 			SetCurrency(item.Currency).
 			SetBillingPeriod(item.BillingPeriod).
 			SetInvoiceCadence(item.InvoiceCadence).
-			SetTrialPeriod(item.TrialPeriod).
 			SetNillableStartDate(types.ToNillableTime(item.StartDate)).
 			SetNillableEndDate(types.ToNillableTime(item.EndDate)).
 			SetNillableSubscriptionPhaseID(item.SubscriptionPhaseID).
@@ -372,16 +392,24 @@ func (r *subscriptionLineItemRepository) CreateBulk(ctx context.Context, items [
 			SetUpdatedAt(item.UpdatedAt)
 	}
 
-	// Execute bulk create
-	_, err := client.SubscriptionLineItem.CreateBulk(bulk...).Save(ctx)
-	if err != nil {
-		SetSpanError(span, err)
-		return ierr.WithError(err).
-			WithHint("Failed to create subscription line items in bulk").
-			WithReportableDetails(map[string]interface{}{
-				"count": len(items),
-			}).
-			Mark(ierr.ErrDatabase)
+	// Execute bulk create in batches to avoid PostgreSQL's 65535 parameter limit.
+	for i := 0; i < len(bulk); i += subscriptionLineItemBatchSize {
+		end := i + subscriptionLineItemBatchSize
+		if end > len(bulk) {
+			end = len(bulk)
+		}
+		_, err := client.SubscriptionLineItem.CreateBulk(bulk[i:end]...).Save(ctx)
+		if err != nil {
+			SetSpanError(span, err)
+			return ierr.WithError(err).
+				WithHint("Failed to create subscription line items in bulk").
+				WithReportableDetails(map[string]interface{}{
+					"count":       len(items),
+					"batch_start": i,
+					"batch_end":   end,
+				}).
+				Mark(ierr.ErrDatabase)
+		}
 	}
 
 	SetSpanSuccess(span)
@@ -433,25 +461,6 @@ func (r *subscriptionLineItemRepository) ListBySubscription(ctx context.Context,
 
 // List retrieves subscription line items based on filter
 func (r *subscriptionLineItemRepository) List(ctx context.Context, filter *types.SubscriptionLineItemFilter) ([]*subscription.SubscriptionLineItem, error) {
-	if filter == nil {
-		filter = &types.SubscriptionLineItemFilter{
-			QueryFilter: types.NewDefaultQueryFilter(),
-		}
-	}
-
-	if err := filter.Validate(); err != nil {
-		return nil, ierr.WithError(err).
-			WithHint("Invalid filter parameters").
-			Mark(ierr.ErrValidation)
-	}
-
-	client := r.client.Reader(ctx)
-	if client == nil {
-		err := ierr.NewError("failed to get database client").
-			WithHint("Database client is not available").
-			Mark(ierr.ErrDatabase)
-		return nil, err
-	}
 
 	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "subscription_line_item", "list", map[string]interface{}{
@@ -462,7 +471,11 @@ func (r *subscriptionLineItemRepository) List(ctx context.Context, filter *types
 	})
 	defer FinishSpan(span)
 
+	client := r.client.Reader(ctx)
 	query := client.SubscriptionLineItem.Query()
+
+	// Apply common query options (includes pagination)
+	query = ApplyQueryOptions(ctx, query, filter.QueryFilter, r.queryOpts)
 
 	// Apply entity-specific filters
 	query, err := r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
@@ -473,14 +486,14 @@ func (r *subscriptionLineItemRepository) List(ctx context.Context, filter *types
 			Mark(ierr.ErrDatabase)
 	}
 
-	// Apply common query options
-	query = ApplyQueryOptions(ctx, query, filter.QueryFilter, r.queryOpts)
-
 	items, err := query.All(ctx)
 	if err != nil {
 		SetSpanError(span, err)
 		return nil, ierr.WithError(err).
 			WithHint("Failed to list subscription line items").
+			WithReportableDetails(map[string]interface{}{
+				"cause": err.Error(),
+			}).
 			Mark(ierr.ErrDatabase)
 	}
 
@@ -490,25 +503,6 @@ func (r *subscriptionLineItemRepository) List(ctx context.Context, filter *types
 
 // Count counts subscription line items based on filter
 func (r *subscriptionLineItemRepository) Count(ctx context.Context, filter *types.SubscriptionLineItemFilter) (int, error) {
-	if filter == nil {
-		filter = &types.SubscriptionLineItemFilter{
-			QueryFilter: types.NewDefaultQueryFilter(),
-		}
-	}
-
-	if err := filter.Validate(); err != nil {
-		return 0, ierr.WithError(err).
-			WithHint("Invalid filter parameters").
-			Mark(ierr.ErrValidation)
-	}
-
-	client := r.client.Reader(ctx)
-	if client == nil {
-		err := ierr.NewError("failed to get database client").
-			WithHint("Database client is not available").
-			Mark(ierr.ErrDatabase)
-		return 0, err
-	}
 
 	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "subscription_line_item", "count", map[string]interface{}{
@@ -519,7 +513,11 @@ func (r *subscriptionLineItemRepository) Count(ctx context.Context, filter *type
 	})
 	defer FinishSpan(span)
 
+	client := r.client.Reader(ctx)
 	query := client.SubscriptionLineItem.Query()
+
+	// Apply base filters only (no pagination for count)
+	query = ApplyBaseFilters(ctx, query, filter.QueryFilter, r.queryOpts)
 
 	// Apply entity-specific filters
 	query, err := r.queryOpts.applyEntityQueryOptions(ctx, filter, query)
@@ -530,19 +528,71 @@ func (r *subscriptionLineItemRepository) Count(ctx context.Context, filter *type
 			Mark(ierr.ErrDatabase)
 	}
 
-	// Apply common query options
-	query = ApplyQueryOptions(ctx, query, filter.QueryFilter, r.queryOpts)
-
 	count, err := query.Count(ctx)
 	if err != nil {
 		SetSpanError(span, err)
 		return 0, ierr.WithError(err).
 			WithHint("Failed to count subscription line items").
+			WithReportableDetails(map[string]interface{}{
+				"cause": err.Error(),
+			}).
 			Mark(ierr.ErrDatabase)
 	}
 
 	SetSpanSuccess(span)
 	return count, nil
+}
+
+// GetDistinctCustomerIDsWithCommitmentTrueUp returns distinct customer IDs from published
+// subscription line items with commitment true-up enabled.
+func (r *subscriptionLineItemRepository) GetDistinctCustomerIDsWithCommitmentTrueUp(ctx context.Context) ([]string, error) {
+	tenantID := types.GetTenantID(ctx)
+	envID := types.GetEnvironmentID(ctx)
+
+	span := StartRepositorySpan(ctx, "subscription_line_item", "get_distinct_customer_ids_commitment_true_up", map[string]interface{}{
+		"tenant_id":      tenantID,
+		"environment_id": envID,
+	})
+	defer FinishSpan(span)
+
+	const query = `
+		SELECT DISTINCT customer_id
+		FROM subscription_line_items
+		WHERE tenant_id = $1
+			AND environment_id = $2
+			AND status = $3
+			AND commitment_true_up_enabled = true
+	`
+
+	rows, err := r.client.Reader(ctx).QueryContext(ctx, query, tenantID, envID, string(types.StatusPublished))
+	if err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).
+			WithHint("Failed to get distinct customer ids with commitment true-up").
+			Mark(ierr.ErrDatabase)
+	}
+	defer rows.Close()
+
+	var customerIDs []string
+	for rows.Next() {
+		var customerID string
+		if err := rows.Scan(&customerID); err != nil {
+			SetSpanError(span, err)
+			return nil, ierr.WithError(err).
+				WithHint("Failed to scan customer id").
+				Mark(ierr.ErrDatabase)
+		}
+		customerIDs = append(customerIDs, customerID)
+	}
+	if err := rows.Err(); err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).
+			WithHint("Failed to iterate customer ids").
+			Mark(ierr.ErrDatabase)
+	}
+
+	SetSpanSuccess(span)
+	return customerIDs, nil
 }
 
 // SubscriptionLineItemQuery type alias for better readability
@@ -581,35 +631,22 @@ func (o SubscriptionLineItemQueryOptions) ApplyPaginationFilter(query Subscripti
 	return query.Limit(limit).Offset(offset)
 }
 
+// GetFieldName returns the ent field name for subscription_line_item; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o SubscriptionLineItemQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return subscriptionlineitem.FieldCreatedAt
-	case "updated_at":
-		return subscriptionlineitem.FieldUpdatedAt
-	case "start_date":
-		return subscriptionlineitem.FieldStartDate
-	case "end_date":
-		return subscriptionlineitem.FieldEndDate
-	case "status":
-		return subscriptionlineitem.FieldStatus
-	case "subscription_id":
-		return subscriptionlineitem.FieldSubscriptionID
-	case "price_id":
-		return subscriptionlineitem.FieldPriceID
-	case "entity_id":
-		return subscriptionlineitem.FieldEntityID
-	case "entity_type":
-		return subscriptionlineitem.FieldEntityType
-	case "meter_id":
-		return subscriptionlineitem.FieldMeterID
-	case "currency":
-		return subscriptionlineitem.FieldCurrency
-	case "billing_period":
-		return subscriptionlineitem.FieldBillingPeriod
-	default:
+	if subscriptionlineitem.ValidColumn(field) {
 		return field
 	}
+	return ""
+}
+
+func (o SubscriptionLineItemQueryOptions) GetFieldResolver(field string) (string, error) {
+	fieldName := o.GetFieldName(field)
+	if fieldName == "" {
+		return "", ierr.NewErrorf("unknown field '%s' in subscription line item query", field).
+			WithHintf("Unknown field '%s' in subscription line item query", field).
+			Mark(ierr.ErrValidation)
+	}
+	return fieldName, nil
 }
 
 // applyEntityQueryOptions applies subscription line item-specific filters to the query
@@ -619,12 +656,22 @@ func (o *SubscriptionLineItemQueryOptions) applyEntityQueryOptions(_ context.Con
 		query = query.Where(subscriptionlineitem.SubscriptionIDIn(f.SubscriptionIDs...))
 	}
 
+	// Apply customer IDs filter if specified
+	if len(f.CustomerIDs) > 0 {
+		query = query.Where(subscriptionlineitem.CustomerIDIn(f.CustomerIDs...))
+	}
+
 	// Apply entity IDs filter if specified
 	if len(f.EntityIDs) > 0 {
 		query = query.Where(subscriptionlineitem.EntityIDIn(f.EntityIDs...))
 	}
 	if f.EntityType != nil {
 		query = query.Where(subscriptionlineitem.EntityType(types.InvoiceLineItemEntityType(*f.EntityType)))
+	}
+
+	// Apply addon association IDs filter if specified
+	if len(f.AddonAssociationIDs) > 0 {
+		query = query.Where(subscriptionlineitem.AddonAssociationIDIn(f.AddonAssociationIDs...))
 	}
 
 	// Apply price IDs filter if specified
@@ -647,6 +694,32 @@ func (o *SubscriptionLineItemQueryOptions) applyEntityQueryOptions(_ context.Con
 
 	if f.ActiveFilter {
 		query = o.applyActiveLineItemFilter(query, f.CurrentPeriodStart)
+	}
+
+	if len(f.Filters) > 0 {
+		var err error
+		query, err = dsl.ApplyFilters[SubscriptionLineItemQuery, predicate.SubscriptionLineItem](
+			query,
+			f.Filters,
+			o.GetFieldResolver,
+			func(p dsl.Predicate) predicate.SubscriptionLineItem { return predicate.SubscriptionLineItem(p) },
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(f.Sort) > 0 {
+		var err error
+		query, err = dsl.ApplySorts[SubscriptionLineItemQuery, subscriptionlineitem.OrderOption](
+			query,
+			f.Sort,
+			o.GetFieldResolver,
+			func(o dsl.OrderFunc) subscriptionlineitem.OrderOption { return subscriptionlineitem.OrderOption(o) },
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return query, nil

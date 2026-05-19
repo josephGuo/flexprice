@@ -64,8 +64,8 @@ const (
 	FieldBillingCadence = "billing_cadence"
 	// FieldInvoiceCadence holds the string denoting the invoice_cadence field in the database.
 	FieldInvoiceCadence = "invoice_cadence"
-	// FieldTrialPeriod holds the string denoting the trial_period field in the database.
-	FieldTrialPeriod = "trial_period"
+	// FieldTrialPeriodDays holds the string denoting the trial_period_days field in the database.
+	FieldTrialPeriodDays = "trial_period_days"
 	// FieldMeterID holds the string denoting the meter_id field in the database.
 	FieldMeterID = "meter_id"
 	// FieldFilterValues holds the string denoting the filter_values field in the database.
@@ -96,6 +96,8 @@ const (
 	FieldEndDate = "end_date"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldSequence holds the string denoting the sequence field in the database.
+	FieldSequence = "sequence"
 	// EdgeCostsheet holds the string denoting the costsheet edge name in mutations.
 	EdgeCostsheet = "costsheet"
 	// EdgePriceUnitEdge holds the string denoting the price_unit_edge edge name in mutations.
@@ -145,7 +147,7 @@ var Columns = []string{
 	FieldBillingModel,
 	FieldBillingCadence,
 	FieldInvoiceCadence,
-	FieldTrialPeriod,
+	FieldTrialPeriodDays,
 	FieldMeterID,
 	FieldFilterValues,
 	FieldTierMode,
@@ -161,6 +163,7 @@ var Columns = []string{
 	FieldStartDate,
 	FieldEndDate,
 	FieldGroupID,
+	FieldSequence,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -208,10 +211,14 @@ var (
 	BillingPeriodCountValidator func(int) error
 	// BillingModelValidator is a validator for the "billing_model" field. It is called by the builders before save.
 	BillingModelValidator func(string) error
+	// DefaultBillingCadence holds the default value on creation for the "billing_cadence" field.
+	DefaultBillingCadence types.BillingCadence
 	// BillingCadenceValidator is a validator for the "billing_cadence" field. It is called by the builders before save.
 	BillingCadenceValidator func(string) error
-	// DefaultTrialPeriod holds the default value on creation for the "trial_period" field.
-	DefaultTrialPeriod int
+	// DefaultTrialPeriodDays holds the default value on creation for the "trial_period_days" field.
+	DefaultTrialPeriodDays int
+	// TrialPeriodDaysValidator is a validator for the "trial_period_days" field. It is called by the builders before save.
+	TrialPeriodDaysValidator func(int) error
 	// DefaultEntityType holds the default value on creation for the "entity_type" field.
 	DefaultEntityType types.PriceEntityType
 	// EntityTypeValidator is a validator for the "entity_type" field. It is called by the builders before save.
@@ -350,9 +357,9 @@ func ByInvoiceCadence(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldInvoiceCadence, opts...).ToFunc()
 }
 
-// ByTrialPeriod orders the results by the trial_period field.
-func ByTrialPeriod(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldTrialPeriod, opts...).ToFunc()
+// ByTrialPeriodDays orders the results by the trial_period_days field.
+func ByTrialPeriodDays(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTrialPeriodDays, opts...).ToFunc()
 }
 
 // ByMeterID orders the results by the meter_id field.
@@ -403,6 +410,11 @@ func ByEndDate(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// BySequence orders the results by the sequence field.
+func BySequence(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSequence, opts...).ToFunc()
 }
 
 // ByCostsheetCount orders the results by costsheet count.

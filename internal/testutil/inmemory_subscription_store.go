@@ -8,14 +8,16 @@ import (
 	ierr "github.com/flexprice/flexprice/internal/errors"
 	"github.com/flexprice/flexprice/internal/types"
 	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
 )
 
 // InMemorySubscriptionStore implements subscription.Repository
 type InMemorySubscriptionStore struct {
 	*InMemoryStore[*subscription.Subscription]
-	lineItems map[string][]*subscription.SubscriptionLineItem // map[subscriptionID][]lineItems
-	pauses    map[string][]*subscription.SubscriptionPause    // map[subscriptionID][]pauses
-	pauseByID map[string]*subscription.SubscriptionPause      // map[pauseID]pause
+	lineItems     map[string][]*subscription.SubscriptionLineItem // map[subscriptionID][]lineItems (initial batch from CreateWithLineItems)
+	lineItemStore *InMemorySubscriptionLineItemStore              // optional: when set, GetWithLineItems merges in line items created via SubscriptionLineItemRepo.Create
+	pauses        map[string][]*subscription.SubscriptionPause    // map[subscriptionID][]pauses
+	pauseByID     map[string]*subscription.SubscriptionPause      // map[pauseID]pause
 }
 
 func NewInMemorySubscriptionStore() *InMemorySubscriptionStore {
@@ -60,6 +62,18 @@ func subscriptionFilterFn(ctx context.Context, sub *subscription.Subscription, f
 		return false
 	}
 
+	// Filter by parent subscription IDs
+	if len(f.ParentSubscriptionIDs) > 0 {
+		if sub.ParentSubscriptionID == nil || !lo.Contains(f.ParentSubscriptionIDs, *sub.ParentSubscriptionID) {
+			return false
+		}
+	}
+
+	// Filter by subscription type
+	if len(f.SubscriptionTypes) > 0 && !lo.Contains(f.SubscriptionTypes, sub.SubscriptionType) {
+		return false
+	}
+
 	// Filter by subscription status
 	if len(f.SubscriptionStatus) > 0 && !lo.Contains(f.SubscriptionStatus, sub.SubscriptionStatus) {
 		return false
@@ -75,8 +89,23 @@ func subscriptionFilterFn(ctx context.Context, sub *subscription.Subscription, f
 		return false
 	}
 
-	// Filter by time range
-	if f.TimeRangeFilter != nil {
+	if f.EffectiveDateForUpdate != nil {
+		d := *f.EffectiveDateForUpdate
+		periodEnded := !sub.CurrentPeriodEnd.After(d)
+		cancelEffective := sub.CancelAt != nil && !sub.CancelAt.After(d)
+		if !periodEnded && !cancelEffective {
+			return false
+		}
+	}
+
+	if f.TrialEndDueLTE != nil {
+		d := *f.TrialEndDueLTE
+		if sub.TrialEnd == nil || sub.TrialEnd.After(d) {
+			return false
+		}
+	}
+
+	if f.EffectiveDateForUpdate == nil && f.TimeRangeFilter != nil {
 		if f.StartTime != nil && sub.CreatedAt.Before(*f.StartTime) {
 			return false
 		}
@@ -279,19 +308,22 @@ func (s *InMemorySubscriptionStore) ListAll(ctx context.Context, filter *types.S
 		TimeRangeFilter:         filter.TimeRangeFilter,
 		CustomerID:              filter.CustomerID,
 		PlanID:                  filter.PlanID,
+		ParentSubscriptionIDs:   filter.ParentSubscriptionIDs,
+		SubscriptionTypes:       filter.SubscriptionTypes,
 		SubscriptionStatus:      filter.SubscriptionStatus,
 		BillingCadence:          filter.BillingCadence,
 		BillingPeriod:           filter.BillingPeriod,
 		SubscriptionStatusNotIn: filter.SubscriptionStatusNotIn,
 		ActiveAt:                filter.ActiveAt,
+		EffectiveDateForUpdate:  filter.EffectiveDateForUpdate,
+		TrialEndDueLTE:          filter.TrialEndDueLTE,
 	}
 
 	return s.List(ctx, unlimitedFilter)
 }
 
-// ListAllTenant returns all subscriptions across all tenants
-// NOTE: This is a potentially expensive operation and to be used only for CRONs
-func (s *InMemorySubscriptionStore) ListAllTenant(ctx context.Context, filter *types.SubscriptionFilter) ([]*subscription.Subscription, error) {
+// GetSubscriptionsForBillingPeriodUpdate returns subscriptions across all tenants for billing-period jobs.
+func (s *InMemorySubscriptionStore) GetSubscriptionsForBillingPeriodUpdate(ctx context.Context, filter *types.SubscriptionFilter) ([]*subscription.Subscription, error) {
 	return s.ListAll(ctx, filter)
 }
 
@@ -302,16 +334,55 @@ func (s *InMemorySubscriptionStore) CreateWithLineItems(ctx context.Context, sub
 	}
 	s.lineItems[sub.ID] = items
 	sub.LineItems = items
+	// Mirror DB behavior: line items must be visible to SubscriptionLineItemRepo (e.g. billing reload).
+	if s.lineItemStore != nil {
+		for _, item := range items {
+			if item == nil {
+				continue
+			}
+			if item.SubscriptionID == "" {
+				item.SubscriptionID = sub.ID
+			}
+			if item.ID == "" {
+				item.ID = types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION_LINE_ITEM)
+			}
+			if err := s.lineItemStore.Create(ctx, item); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
-// GetWithLineItems gets a subscription with its line items
+// SetLineItemStore sets the line item store so GetWithLineItems can return line items added via SubscriptionLineItemRepo.Create (e.g. AddSubscriptionLineItem).
+func (s *InMemorySubscriptionStore) SetLineItemStore(store *InMemorySubscriptionLineItemStore) {
+	s.lineItemStore = store
+}
+
+// GetWithLineItems gets a subscription with its line items.
+// When lineItemStore is set, line items come from SubscriptionLineItemRepo only (mirrors DB + supports Update).
+// Otherwise returns the batch from CreateWithLineItems.
 func (s *InMemorySubscriptionStore) GetWithLineItems(ctx context.Context, id string) (*subscription.Subscription, []*subscription.SubscriptionLineItem, error) {
 	sub, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, nil, err
 	}
+	if s.lineItemStore != nil {
+		filter := types.NewNoLimitSubscriptionLineItemFilter()
+		filter.SubscriptionIDs = []string{id}
+		filter.ActiveFilter = true
+		filter.CurrentPeriodStart = &sub.CurrentPeriodStart
+		items, lerr := s.lineItemStore.List(ctx, filter)
+		if lerr != nil {
+			return nil, nil, lerr
+		}
+		sub.LineItems = items
+		return sub, items, nil
+	}
 	items := s.lineItems[id]
+	if items == nil {
+		items = []*subscription.SubscriptionLineItem{}
+	}
 	sub.LineItems = items
 	return sub, items, nil
 }
@@ -416,6 +487,86 @@ func (s *InMemorySubscriptionStore) ListSubscriptionsDueForRenewal(ctx context.C
 	}
 
 	return s.ListAll(ctx, filter)
+}
+
+// GetRecentSubscriptionsByPlan returns subscription counts grouped by plan for last 7 days
+func (s *InMemorySubscriptionStore) GetRecentSubscriptionsByPlan(ctx context.Context) ([]types.SubscriptionPlanCount, error) {
+	now := time.Now().UTC()
+	sevenDaysAgo := now.AddDate(0, 0, -7)
+
+	// Get all subscriptions created in last 7 days
+	filter := &types.SubscriptionFilter{
+		QueryFilter: types.NewNoLimitQueryFilter(),
+		TimeRangeFilter: &types.TimeRangeFilter{
+			StartTime: lo.ToPtr(sevenDaysAgo),
+			EndTime:   lo.ToPtr(now),
+		},
+	}
+
+	subscriptions, err := s.ListAll(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
+	// Group by plan
+	planCounts := make(map[string]*types.SubscriptionPlanCount)
+	for _, sub := range subscriptions {
+		if sub.PlanID == "" {
+			continue
+		}
+
+		if pc, exists := planCounts[sub.PlanID]; exists {
+			pc.Count++
+		} else {
+			planCounts[sub.PlanID] = &types.SubscriptionPlanCount{
+				PlanID:   sub.PlanID,
+				PlanName: sub.PlanID, // Use PlanID as PlanName since we don't have plan data in test store
+				Count:    1,
+			}
+		}
+	}
+
+	// Convert map to slice
+	result := make([]types.SubscriptionPlanCount, 0, len(planCounts))
+	for _, pc := range planCounts {
+		result = append(result, *pc)
+	}
+
+	return result, nil
+}
+
+// GetSubscriptionsWithAutoInvoiceThreshold returns active subscriptions where
+// auto_invoice_threshold is set on the subscription (see subscription.Repository).
+func (s *InMemorySubscriptionStore) GetSubscriptionsWithAutoInvoiceThreshold(ctx context.Context, limit, offset int) ([]*subscription.Subscription, error) {
+	all, err := s.ListAll(ctx, &types.SubscriptionFilter{
+		QueryFilter: types.NewNoLimitQueryFilter(),
+		SubscriptionStatus: []types.SubscriptionStatus{
+			types.SubscriptionStatusActive,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []*subscription.Subscription
+	for _, sub := range all {
+		if sub.SubscriptionType != types.SubscriptionTypeStandalone || sub.Status != types.StatusPublished {
+			continue
+		}
+		if sub.AutoInvoiceThreshold != nil && sub.AutoInvoiceThreshold.GreaterThan(decimal.Zero) {
+			results = append(results, sub)
+		}
+	}
+
+	// Apply offset and limit
+	if offset >= len(results) {
+		return []*subscription.Subscription{}, nil
+	}
+	results = results[offset:]
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	return results, nil
 }
 
 // Clear removes all data from the store

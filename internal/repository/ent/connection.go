@@ -93,6 +93,8 @@ func (r *connectionRepository) Create(ctx context.Context, c *domainConnection.C
 	return nil
 }
 
+// Get is used for providers that support multiple connections per environment.
+// this method returns the connection by the given connection ID.
 func (r *connectionRepository) Get(ctx context.Context, id string) (*domainConnection.Connection, error) {
 	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "connection", "get", map[string]interface{}{
@@ -142,6 +144,8 @@ func (r *connectionRepository) Get(ctx context.Context, id string) (*domainConne
 	return domainConn, nil
 }
 
+// GetByProvider is used for providers that does not support multiple connections per environment.
+// this method returns the first result only and should NOT be used if the provider supports multiple connections per environment.
 func (r *connectionRepository) GetByProvider(ctx context.Context, provider types.SecretProvider) (*domainConnection.Connection, error) {
 	// Start a span for this repository operation
 	span := StartRepositorySpan(ctx, "connection", "get_by_provider", map[string]interface{}{
@@ -315,6 +319,77 @@ func convertConnectionMetadataToMap(encryptedSecretData types.ConnectionMetadata
 				data["webhook_secret"] = encryptedSecretData.Nomod.WebhookSecret
 			}
 			return data
+		}
+	case types.SecretProviderMoyasar:
+		if encryptedSecretData.Moyasar != nil {
+			data := map[string]interface{}{
+				"secret_key": encryptedSecretData.Moyasar.SecretKey,
+			}
+			if encryptedSecretData.Moyasar.PublishableKey != "" {
+				data["publishable_key"] = encryptedSecretData.Moyasar.PublishableKey
+			}
+			if encryptedSecretData.Moyasar.WebhookSecret != "" {
+				data["webhook_secret"] = encryptedSecretData.Moyasar.WebhookSecret
+			}
+			return data
+		}
+	case types.SecretProviderPaddle:
+		if encryptedSecretData.Paddle != nil {
+			data := map[string]interface{}{
+				"api_key": encryptedSecretData.Paddle.APIKey,
+			}
+			if encryptedSecretData.Paddle.WebhookSecret != "" {
+				data["webhook_secret"] = encryptedSecretData.Paddle.WebhookSecret
+			}
+			if encryptedSecretData.Paddle.ClientSideToken != "" {
+				data["client_side_token"] = encryptedSecretData.Paddle.ClientSideToken
+			}
+			return data
+		}
+	case types.SecretProviderZohoBooks:
+		if encryptedSecretData.ZohoBooks != nil {
+			result := map[string]interface{}{
+				"client_id":       encryptedSecretData.ZohoBooks.ClientID,
+				"client_secret":   encryptedSecretData.ZohoBooks.ClientSecret,
+				"organization_id": encryptedSecretData.ZohoBooks.OrganizationID,
+			}
+			if encryptedSecretData.ZohoBooks.RefreshToken != "" {
+				result["refresh_token"] = encryptedSecretData.ZohoBooks.RefreshToken
+			}
+			if encryptedSecretData.ZohoBooks.AccessToken != "" {
+				result["access_token"] = encryptedSecretData.ZohoBooks.AccessToken
+			}
+			if encryptedSecretData.ZohoBooks.AuthCode != "" {
+				result["auth_code"] = encryptedSecretData.ZohoBooks.AuthCode
+			}
+			if encryptedSecretData.ZohoBooks.RedirectURI != "" {
+				result["redirect_uri"] = encryptedSecretData.ZohoBooks.RedirectURI
+			}
+			if encryptedSecretData.ZohoBooks.APIDomain != "" {
+				result["api_domain"] = encryptedSecretData.ZohoBooks.APIDomain
+			}
+			if encryptedSecretData.ZohoBooks.AccountsURL != "" {
+				result["accounts_server"] = encryptedSecretData.ZohoBooks.AccountsURL
+			}
+			if encryptedSecretData.ZohoBooks.Location != "" {
+				result["location"] = encryptedSecretData.ZohoBooks.Location
+			}
+			if encryptedSecretData.ZohoBooks.OrganizationName != "" {
+				result["organization_name"] = encryptedSecretData.ZohoBooks.OrganizationName
+			}
+			if encryptedSecretData.ZohoBooks.Scopes != "" {
+				result["scopes"] = encryptedSecretData.ZohoBooks.Scopes
+			}
+			if encryptedSecretData.ZohoBooks.AccessTokenExpiresAt != "" {
+				result["access_token_expires_at"] = encryptedSecretData.ZohoBooks.AccessTokenExpiresAt
+			}
+			if encryptedSecretData.ZohoBooks.OAuthSessionData != "" {
+				result["oauth_session_data"] = encryptedSecretData.ZohoBooks.OAuthSessionData
+			}
+			if encryptedSecretData.ZohoBooks.WebhookSecret != "" {
+				result["webhook_secret"] = encryptedSecretData.ZohoBooks.WebhookSecret
+			}
+			return result
 		}
 	default:
 		// For other providers or unknown types, use generic format
@@ -498,22 +573,12 @@ func (o ConnectionQueryOptions) ApplyPaginationFilter(query ConnectionQuery, lim
 	return query
 }
 
+// GetFieldName returns the ent field name for connection; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o ConnectionQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return connection.FieldCreatedAt
-	case "updated_at":
-		return connection.FieldUpdatedAt
-	case "name":
-		return connection.FieldName
-	case "provider_type":
-		return connection.FieldProviderType
-	case "status":
-		return connection.FieldStatus
-	default:
-		//unknown field
-		return ""
+	if connection.ValidColumn(field) {
+		return field
 	}
+	return ""
 }
 
 func (o ConnectionQueryOptions) GetFieldResolver(field string) (string, error) {

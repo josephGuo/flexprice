@@ -18,8 +18,12 @@ import (
 	chargebeewebhook "github.com/flexprice/flexprice/internal/integration/chargebee/webhook"
 	"github.com/flexprice/flexprice/internal/integration/hubspot"
 	hubspotwebhook "github.com/flexprice/flexprice/internal/integration/hubspot/webhook"
+	"github.com/flexprice/flexprice/internal/integration/moyasar"
+	moyasarwebhook "github.com/flexprice/flexprice/internal/integration/moyasar/webhook"
 	"github.com/flexprice/flexprice/internal/integration/nomod"
 	nomodwebhook "github.com/flexprice/flexprice/internal/integration/nomod/webhook"
+	"github.com/flexprice/flexprice/internal/integration/paddle"
+	paddlewebhook "github.com/flexprice/flexprice/internal/integration/paddle/webhook"
 	"github.com/flexprice/flexprice/internal/integration/quickbooks"
 	quickbookswebhook "github.com/flexprice/flexprice/internal/integration/quickbooks/webhook"
 	"github.com/flexprice/flexprice/internal/integration/razorpay"
@@ -27,6 +31,7 @@ import (
 	"github.com/flexprice/flexprice/internal/integration/s3"
 	"github.com/flexprice/flexprice/internal/integration/stripe"
 	"github.com/flexprice/flexprice/internal/integration/stripe/webhook"
+	"github.com/flexprice/flexprice/internal/integration/zoho"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/security"
 	"github.com/flexprice/flexprice/internal/types"
@@ -298,22 +303,24 @@ func (f *Factory) GetChargebeeIntegration(ctx context.Context) (*ChargebeeIntegr
 		Logger:                       f.logger,
 	})
 
-	// Create invoice service
-	invoiceSvc := chargebee.NewInvoiceService(chargebee.InvoiceServiceParams{
-		Client:                       chargebeeClient,
-		CustomerSvc:                  customerSvc,
-		InvoiceRepo:                  f.invoiceRepo,
-		PaymentRepo:                  f.paymentRepo,
-		EntityIntegrationMappingRepo: f.entityIntegrationMappingRepo,
-		Logger:                       f.logger,
-	})
-
 	// Create plan sync service
 	planSyncSvc := chargebee.NewPlanSyncService(chargebee.PlanSyncServiceParams{
 		Client:                       chargebeeClient,
 		EntityIntegrationMappingRepo: f.entityIntegrationMappingRepo,
 		MeterRepo:                    f.meterRepo,
 		FeatureRepo:                  f.featureRepo,
+		Logger:                       f.logger,
+	})
+
+	// Create invoice service
+	invoiceSvc := chargebee.NewInvoiceService(chargebee.InvoiceServiceParams{
+		Client:                       chargebeeClient,
+		CustomerSvc:                  customerSvc,
+		InvoiceRepo:                  f.invoiceRepo,
+		PaymentRepo:                  f.paymentRepo,
+		PriceRepo:                    f.priceRepo,
+		PlanSyncSvc:                  planSyncSvc,
+		EntityIntegrationMappingRepo: f.entityIntegrationMappingRepo,
 		Logger:                       f.logger,
 	})
 
@@ -338,6 +345,17 @@ func (f *Factory) GetChargebeeIntegration(ctx context.Context) (*ChargebeeIntegr
 
 // GetQuickBooksIntegration returns a complete QuickBooks integration setup
 func (f *Factory) GetQuickBooksIntegration(ctx context.Context) (*QuickBooksIntegration, error) {
+	// Verify a QuickBooks connection exists for this environment before building the integration
+	conn, err := f.connectionRepo.GetByProvider(ctx, types.SecretProviderQuickBooks)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.Status != types.StatusPublished {
+		return nil, ierr.NewError("Connection with provider quickbooks is not configured in this environment").
+			WithHint("QuickBooks connection must be configured and published before use").
+			Mark(ierr.ErrNotFound)
+	}
+
 	// Create QuickBooks client
 	qbClient := quickbooks.NewClient(
 		f.connectionRepo,
@@ -397,6 +415,60 @@ func (f *Factory) GetQuickBooksIntegration(ctx context.Context) (*QuickBooksInte
 	}, nil
 }
 
+// GetPaddleIntegration returns a complete Paddle integration setup
+func (f *Factory) GetPaddleIntegration(ctx context.Context) (*PaddleIntegration, error) {
+	// Verify a Paddle connection exists for this environment before building the integration.
+	// This allows callers (e.g. Temporal activities) to detect ErrNotFound early and stop
+	// retrying a permanent configuration problem.
+	conn, err := f.connectionRepo.GetByProvider(ctx, types.SecretProviderPaddle)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.Status != types.StatusPublished {
+		return nil, ierr.NewError("Connection with provider paddle is not configured in this environment").
+			WithHint("Paddle connection must be configured and published before use").
+			Mark(ierr.ErrNotFound)
+	}
+
+	paddleClient := paddle.NewClient(
+		f.connectionRepo,
+		f.encryptionService,
+		f.logger,
+	)
+
+	customerSvc := paddle.NewCustomerService(
+		paddleClient,
+		f.customerRepo,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	invoiceSyncSvc := paddle.NewInvoiceSyncService(
+		paddleClient,
+		customerSvc,
+		f.invoiceRepo,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+		f.config.Auth.Secret,
+	)
+
+	paymentSvc := paddle.NewPaymentService(f.logger)
+
+	webhookHandler := paddlewebhook.NewHandler(
+		paymentSvc,
+		customerSvc,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	return &PaddleIntegration{
+		Client:         paddleClient,
+		CustomerSvc:    customerSvc,
+		InvoiceSyncSvc: invoiceSyncSvc,
+		WebhookHandler: webhookHandler,
+	}, nil
+}
+
 // GetNomodIntegration returns a complete Nomod integration setup
 func (f *Factory) GetNomodIntegration(ctx context.Context) (*NomodIntegration, error) {
 	// Create Nomod client
@@ -449,6 +521,104 @@ func (f *Factory) GetNomodIntegration(ctx context.Context) (*NomodIntegration, e
 	}, nil
 }
 
+// GetMoyasarIntegration returns a complete Moyasar integration setup
+func (f *Factory) GetMoyasarIntegration(ctx context.Context) (*MoyasarIntegration, error) {
+	// Create Moyasar client
+	moyasarClient := moyasar.NewClient(
+		f.connectionRepo,
+		f.encryptionService,
+		f.logger,
+	)
+
+	// Create customer service
+	customerSvc := moyasar.NewCustomerService(
+		moyasarClient,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	// Create invoice sync service
+	invoiceSyncSvc := moyasar.NewInvoiceSyncService(
+		moyasarClient,
+		f.invoiceRepo,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	// Create payment service
+	paymentSvc := moyasar.NewPaymentService(
+		moyasarClient,
+		customerSvc,
+		invoiceSyncSvc,
+		f.logger,
+	)
+
+	// Create webhook handler
+	webhookHandler := moyasarwebhook.NewHandler(
+		moyasarClient,
+		paymentSvc,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	return &MoyasarIntegration{
+		Client:         moyasarClient,
+		CustomerSvc:    customerSvc,
+		PaymentSvc:     paymentSvc,
+		InvoiceSyncSvc: invoiceSyncSvc,
+		WebhookHandler: webhookHandler,
+	}, nil
+}
+
+// GetZohoBooksIntegration returns a complete Zoho Books integration setup
+func (f *Factory) GetZohoBooksIntegration(ctx context.Context) (*ZohoBooksIntegration, error) {
+	conn, err := f.connectionRepo.GetByProvider(ctx, types.SecretProviderZohoBooks)
+	if err != nil {
+		return nil, err
+	}
+	if conn == nil || conn.Status != types.StatusPublished {
+		return nil, ierr.NewError("Connection with provider zoho_books is not configured in this environment").
+			WithHint("Zoho Books connection must be configured and published before use").
+			Mark(ierr.ErrNotFound)
+	}
+
+	zohoClient := zoho.NewClient(
+		f.connectionRepo,
+		f.encryptionService,
+		f.logger,
+	)
+	customerSvc := zoho.NewCustomerService(
+		zohoClient,
+		f.customerRepo,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+	taxSvc := zoho.NewTaxService(zohoClient, f.logger)
+	itemSyncSvc := zoho.NewItemSyncService(zoho.ItemSyncServiceParams{
+		Client:      zohoClient,
+		MappingRepo: f.entityIntegrationMappingRepo,
+		Logger:      f.logger,
+	})
+	invoiceSvc := zoho.NewInvoiceService(
+		zohoClient,
+		customerSvc,
+		itemSyncSvc,
+		taxSvc,
+		f.customerRepo,
+		f.invoiceRepo,
+		f.entityIntegrationMappingRepo,
+		f.logger,
+	)
+
+	return &ZohoBooksIntegration{
+		Client:      zohoClient,
+		CustomerSvc: customerSvc,
+		InvoiceSvc:  invoiceSvc,
+		ItemSyncSvc: itemSyncSvc,
+		TaxSvc:      taxSvc,
+	}, nil
+}
+
 // GetIntegrationByProvider returns the appropriate integration for the given provider type
 func (f *Factory) GetIntegrationByProvider(ctx context.Context, providerType types.SecretProvider) (interface{}, error) {
 	switch providerType {
@@ -464,6 +634,12 @@ func (f *Factory) GetIntegrationByProvider(ctx context.Context, providerType typ
 		return f.GetQuickBooksIntegration(ctx)
 	case types.SecretProviderNomod:
 		return f.GetNomodIntegration(ctx)
+	case types.SecretProviderPaddle:
+		return f.GetPaddleIntegration(ctx)
+	case types.SecretProviderMoyasar:
+		return f.GetMoyasarIntegration(ctx)
+	case types.SecretProviderZohoBooks:
+		return f.GetZohoBooksIntegration(ctx)
 	default:
 		return nil, ierr.NewError("unsupported integration provider").
 			WithHint("Provider type is not supported").
@@ -483,6 +659,9 @@ func (f *Factory) GetSupportedProviders() []types.SecretProvider {
 		types.SecretProviderChargebee,
 		types.SecretProviderQuickBooks,
 		types.SecretProviderNomod,
+		types.SecretProviderPaddle,
+		types.SecretProviderMoyasar,
+		types.SecretProviderZohoBooks,
 	}
 }
 
@@ -547,6 +726,14 @@ type QuickBooksIntegration struct {
 	WebhookHandler *quickbookswebhook.Handler
 }
 
+// PaddleIntegration contains all Paddle integration services
+type PaddleIntegration struct {
+	Client         paddle.PaddleClient
+	CustomerSvc    paddle.PaddleCustomerService
+	InvoiceSyncSvc *paddle.InvoiceSyncService
+	WebhookHandler *paddlewebhook.Handler
+}
+
 // NomodIntegration contains all Nomod integration services
 type NomodIntegration struct {
 	Client         nomod.NomodClient
@@ -554,6 +741,24 @@ type NomodIntegration struct {
 	PaymentSvc     *nomod.PaymentService
 	InvoiceSyncSvc *nomod.InvoiceSyncService
 	WebhookHandler *nomodwebhook.Handler
+}
+
+// MoyasarIntegration contains all Moyasar integration services
+type MoyasarIntegration struct {
+	Client         moyasar.MoyasarClient
+	CustomerSvc    moyasar.MoyasarCustomerService
+	PaymentSvc     *moyasar.PaymentService
+	InvoiceSyncSvc *moyasar.InvoiceSyncService
+	WebhookHandler *moyasarwebhook.Handler
+}
+
+// ZohoBooksIntegration contains all Zoho Books integration services
+type ZohoBooksIntegration struct {
+	Client      zoho.ZohoClient
+	CustomerSvc zoho.ZohoCustomerService
+	InvoiceSvc  zoho.ZohoInvoiceService
+	ItemSyncSvc zoho.ZohoItemSyncService
+	TaxSvc      zoho.ZohoTaxService
 }
 
 // IntegrationProvider defines the interface for all integration providers
@@ -637,6 +842,36 @@ func (p *NomodProvider) IsAvailable(ctx context.Context) bool {
 	return p.integration.Client.HasNomodConnection(ctx)
 }
 
+// PaddleProvider implements IntegrationProvider for Paddle
+type PaddleProvider struct {
+	integration *PaddleIntegration
+}
+
+// ZohoBooksProvider implements IntegrationProvider for Zoho Books
+type ZohoBooksProvider struct {
+	integration *ZohoBooksIntegration
+}
+
+// GetProviderType returns the provider type
+func (p *ZohoBooksProvider) GetProviderType() types.SecretProvider {
+	return types.SecretProviderZohoBooks
+}
+
+// IsAvailable checks if Zoho Books integration is available
+func (p *ZohoBooksProvider) IsAvailable(ctx context.Context) bool {
+	return p.integration.Client.HasZohoBooksConnection(ctx)
+}
+
+// GetProviderType returns the provider type
+func (p *PaddleProvider) GetProviderType() types.SecretProvider {
+	return types.SecretProviderPaddle
+}
+
+// IsAvailable checks if Paddle integration is available
+func (p *PaddleProvider) IsAvailable(ctx context.Context) bool {
+	return p.integration.Client.HasPaddleConnection(ctx)
+}
+
 // GetAvailableProviders returns all available providers for the current environment
 func (f *Factory) GetAvailableProviders(ctx context.Context) ([]IntegrationProvider, error) {
 	var providers []IntegrationProvider
@@ -683,6 +918,24 @@ func (f *Factory) GetAvailableProviders(ctx context.Context) ([]IntegrationProvi
 		nomodProvider := &NomodProvider{integration: nomodIntegration}
 		if nomodProvider.IsAvailable(ctx) {
 			providers = append(providers, nomodProvider)
+		}
+	}
+
+	// Check Paddle
+	paddleIntegration, err := f.GetPaddleIntegration(ctx)
+	if err == nil {
+		paddleProvider := &PaddleProvider{integration: paddleIntegration}
+		if paddleProvider.IsAvailable(ctx) {
+			providers = append(providers, paddleProvider)
+		}
+	}
+
+	// Check Zoho Books
+	zohoIntegration, err := f.GetZohoBooksIntegration(ctx)
+	if err == nil {
+		zohoProvider := &ZohoBooksProvider{integration: zohoIntegration}
+		if zohoProvider.IsAvailable(ctx) {
+			providers = append(providers, zohoProvider)
 		}
 	}
 

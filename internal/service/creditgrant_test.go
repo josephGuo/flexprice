@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -66,6 +67,7 @@ func (s *CreditGrantServiceTestSuite) setupServices() {
 		CustomerRepo:               s.GetStores().CustomerRepo,
 		PlanRepo:                   s.GetStores().PlanRepo,
 		SubRepo:                    s.GetStores().SubscriptionRepo,
+		SubscriptionLineItemRepo:   s.GetStores().SubscriptionLineItemRepo,
 		SubscriptionPhaseRepo:      s.GetStores().SubscriptionPhaseRepo,
 		WalletRepo:                 s.GetStores().WalletRepo,
 		TenantRepo:                 s.GetStores().TenantRepo,
@@ -87,6 +89,7 @@ func (s *CreditGrantServiceTestSuite) setupServices() {
 		WebhookPublisher:           s.GetWebhookPublisher(),
 		AlertLogsRepo:              s.GetStores().AlertLogsRepo,
 		WalletBalanceAlertPubSub:   types.WalletBalanceAlertPubSub{PubSub: testutil.NewInMemoryPubSub()},
+		AddonAssociationRepo:       s.GetStores().AddonAssociationRepo,
 	}
 
 	s.creditGrantService = NewCreditGrantService(serviceParams)
@@ -121,6 +124,7 @@ func (s *CreditGrantServiceTestSuite) setupTestData() {
 		ID:                 "sub_test_123",
 		PlanID:             s.testData.plan.ID,
 		CustomerID:         s.testData.customer.ID,
+		Currency:           "USD",
 		StartDate:          s.testData.now,
 		CurrentPeriodStart: s.testData.now,
 		CurrentPeriodEnd:   s.testData.now.Add(30 * 24 * time.Hour), // 30 days
@@ -155,26 +159,28 @@ func (s *CreditGrantServiceTestSuite) getWalletTransactionByGrantID(customerID s
 		return nil, fmt.Errorf("wallet not found for customer: %s", customerID)
 	}
 
-	walletID := wallets[0].ID
-	txFilter := &types.WalletTransactionFilter{
-		WalletID:    &walletID,
-		QueryFilter: types.NewDefaultQueryFilter(),
-	}
-	transactions, err := s.walletService.GetWalletTransactions(s.GetContext(), walletID, txFilter)
-	if err != nil {
-		return nil, err
-	}
+	// Search through all wallets to find the transaction
+	for _, wallet := range wallets {
+		txFilter := &types.WalletTransactionFilter{
+			WalletID:    &wallet.ID,
+			QueryFilter: types.NewDefaultQueryFilter(),
+		}
+		transactions, err := s.walletService.GetWalletTransactions(s.GetContext(), wallet.ID, txFilter)
+		if err != nil {
+			return nil, err
+		}
 
-	for _, tx := range transactions.Items {
-		if tx.Metadata != nil {
-			if grantID != nil {
-				if id, ok := tx.Metadata["grant_id"]; ok && id == *grantID {
-					return tx, nil
+		for _, tx := range transactions.Items {
+			if tx.Metadata != nil {
+				if grantID != nil {
+					if id, ok := tx.Metadata["grant_id"]; ok && id == *grantID {
+						return tx, nil
+					}
 				}
-			}
-			if cgaID != nil {
-				if id, ok := tx.Metadata["cga_id"]; ok && id == *cgaID {
-					return tx, nil
+				if cgaID != nil {
+					if id, ok := tx.Metadata["cga_id"]; ok && id == *cgaID {
+						return tx, nil
+					}
 				}
 			}
 		}
@@ -791,14 +797,18 @@ func (s *CreditGrantServiceTestSuite) TestDeleteCreditGrant() {
 	creditGrantResp, err := s.creditGrantService.CreateCreditGrant(s.GetContext(), creditGrantReq)
 	s.NoError(err)
 
-	// Delete the credit grant
-	err = s.creditGrantService.DeleteCreditGrant(s.GetContext(), creditGrantResp.CreditGrant.ID)
+	// Delete the credit grant (subscription scope: sets end date and cancels future CGAs, does not delete)
+	err = s.creditGrantService.DeleteCreditGrant(s.GetContext(), dto.DeleteCreditGrantRequest{
+		CreditGrantID: creditGrantResp.CreditGrant.ID,
+		EffectiveDate: &s.testData.now,
+	})
 	s.NoError(err)
 
-	// Verify it's deleted (should return not found error)
-	_, err = s.creditGrantService.GetCreditGrant(s.GetContext(), creditGrantResp.CreditGrant.ID)
-	s.Error(err)
-	s.True(ierr.IsNotFound(err))
+	// For subscription-scoped grants, the grant is not deleted; end date is set. Verify grant still exists with end date set.
+	gotGrant, err := s.creditGrantService.GetCreditGrant(s.GetContext(), creditGrantResp.CreditGrant.ID)
+	s.NoError(err)
+	s.NotNil(gotGrant.EndDate)
+	s.True(gotGrant.EndDate.Equal(s.testData.now) || (gotGrant.EndDate.After(s.testData.now.Add(-time.Second)) && gotGrant.EndDate.Before(s.testData.now.Add(time.Second))))
 }
 
 // Test Case 13: Test period start and end dates for weekly credit grant
@@ -927,10 +937,12 @@ func (s *CreditGrantServiceTestSuite) TestMonthlyCreditGrantPeriodDates() {
 	s.NotNil(currentApp.PeriodStart)
 	s.NotNil(currentApp.PeriodEnd)
 
-	// For monthly period, verify it's approximately 30 days (allowing for month variations)
+	// For monthly period, verify it's approximately 28-32 days (allow 1h tolerance for float/DST)
 	periodDuration := currentApp.PeriodEnd.Sub(currentApp.PeriodStart)
-	s.GreaterOrEqual(periodDuration.Hours(), float64(28*24), "Monthly period should be at least 28 days")
-	s.LessOrEqual(periodDuration.Hours(), float64(32*24), "Monthly period should be at most 32 days")
+	// Round to account for floating-point precision issues
+	periodHours := math.Round(periodDuration.Hours()*100) / 100
+	s.GreaterOrEqual(periodHours, float64(28*24)-1, "Monthly period should be at least 28 days")
+	s.LessOrEqual(periodHours, float64(32*24), "Monthly period should be at most 32 days")
 
 	// Verify next period dates
 	s.NotNil(nextApp.PeriodStart)
@@ -940,10 +952,12 @@ func (s *CreditGrantServiceTestSuite) TestMonthlyCreditGrantPeriodDates() {
 	s.WithinDuration(*currentApp.PeriodEnd, nextApp.PeriodStart, time.Minute,
 		"Next period should start when current period ends")
 
-	// Next period should also be approximately monthly
+	// Next period should also be approximately monthly (allow 1h tolerance for float/DST)
 	nextPeriodDuration := nextApp.PeriodEnd.Sub(nextApp.PeriodStart)
-	s.GreaterOrEqual(nextPeriodDuration.Hours(), float64(28*24), "Next monthly period should be at least 28 days")
-	s.LessOrEqual(nextPeriodDuration.Hours(), float64(32*24), "Next monthly period should be at most 32 days")
+	// Round to account for floating-point precision issues
+	nextPeriodHours := math.Round(nextPeriodDuration.Hours()*100) / 100
+	s.GreaterOrEqual(nextPeriodHours, float64(28*24)-1, "Next monthly period should be at least 28 days")
+	s.LessOrEqual(nextPeriodHours, float64(32*24), "Next monthly period should be at most 32 days")
 
 	s.T().Logf("Monthly Grant - Current Period: %s to %s (Duration: %.1f days)",
 		currentApp.PeriodStart.Format("2006-01-02 15:04:05"),
@@ -1111,8 +1125,14 @@ func (s *CreditGrantServiceTestSuite) TestMultiplePeriodCountDates() {
 
 // Test Case 17: Test period dates alignment with credit grant creation date
 func (s *CreditGrantServiceTestSuite) TestPeriodDatesAlignmentWithGrantCreationDate() {
-	// Set a specific creation time for deterministic testing
-	specificTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC) // Jan 15, 2024, 10:30 AM
+	// Anchor to the most recent 15th 10:30 UTC that is not in the future. Recurring grant
+	// catch-up applies every past-due period until the next ScheduledFor is after now; a fixed
+	// 2024 date would create one application per month from 2024 through the test run year.
+	now := time.Now().UTC()
+	specificTime := time.Date(now.Year(), now.Month(), 15, 10, 30, 0, 0, time.UTC)
+	if now.Before(specificTime) {
+		specificTime = specificTime.AddDate(0, -1, 0)
+	}
 
 	// Create a new subscription starting at specific time
 	testSubscription := &subscription.Subscription{
@@ -1121,7 +1141,7 @@ func (s *CreditGrantServiceTestSuite) TestPeriodDatesAlignmentWithGrantCreationD
 		CustomerID:         s.testData.customer.ID,
 		StartDate:          specificTime,
 		CurrentPeriodStart: specificTime,
-		CurrentPeriodEnd:   specificTime.Add(30 * 24 * time.Hour),
+		CurrentPeriodEnd:   specificTime.AddDate(0, 1, 0),
 		Currency:           "usd",
 		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 		BillingPeriodCount: 1,
@@ -2156,10 +2176,10 @@ func (s *CreditGrantServiceTestSuite) TestSubscriptionCancellationCancelsFutureG
 	s.Equal(types.ApplicationStatusCancelled, cancelledFutureApp.ApplicationStatus, "Future application should be cancelled")
 	s.Nil(cancelledFutureApp.AppliedAt, "Cancelled application should not have AppliedAt set")
 
-	// Verify that the grant was archived (deleted) as part of cancellation
-	_, err = s.GetStores().CreditGrantRepo.Get(s.GetContext(), creditGrantResp.CreditGrant.ID)
-	s.Error(err, "Grant should be deleted/archived after cancellation")
-	s.Contains(err.Error(), "not found", "Error should indicate grant not found")
+	// Verify that the grant has end_date set (subscription-scoped grants are not deleted, just ended)
+	updatedGrant, err := s.GetStores().CreditGrantRepo.Get(s.GetContext(), creditGrantResp.CreditGrant.ID)
+	s.NoError(err, "Grant should still exist after cancellation")
+	s.NotNil(updatedGrant.EndDate, "Grant should have end_date set after cancellation")
 
 	// Test that processing a grant application for a cancelled subscription results in cancellation
 	// Create a new subscription and grant for this test
@@ -2231,4 +2251,121 @@ func (s *CreditGrantServiceTestSuite) TestSubscriptionCancellationCancelsFutureG
 	// Verify no wallet transaction was created for the cancelled application
 	_, err = s.getWalletTransactionByGrantID(testSub2.CustomerID, nil, &manualFutureApp.ID)
 	s.Error(err, "No wallet transaction should be created for cancelled future applications")
+}
+
+// createBackdatedSubscription creates a subscription with start date in the past.
+func (s *CreditGrantServiceTestSuite) createBackdatedSubscription(id string, startDate time.Time) *subscription.Subscription {
+	sub := &subscription.Subscription{
+		ID:                 id,
+		PlanID:             s.testData.plan.ID,
+		CustomerID:         s.testData.customer.ID,
+		Currency:           "USD",
+		StartDate:          startDate,
+		CurrentPeriodStart: startDate,
+		CurrentPeriodEnd:   startDate.AddDate(0, 1, 0),
+		BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+		BillingPeriodCount: 1,
+		SubscriptionStatus: types.SubscriptionStatusActive,
+		BillingAnchor:      startDate,
+		BaseModel:          types.GetDefaultBaseModel(s.GetContext()),
+	}
+	s.NoError(s.GetStores().SubscriptionRepo.CreateWithLineItems(s.GetContext(), sub, nil))
+	return sub
+}
+
+// countCGAStatuses returns (applied, pending) counts for a grant.
+func (s *CreditGrantServiceTestSuite) countCGAStatuses(grantID string) (applied, pending int) {
+	filter := &types.CreditGrantApplicationFilter{
+		CreditGrantIDs: []string{grantID},
+		QueryFilter:    types.NewNoLimitQueryFilter(),
+	}
+	apps, err := s.GetStores().CreditGrantApplicationRepo.List(s.GetContext(), filter)
+	s.NoError(err)
+	for _, a := range apps {
+		switch a.ApplicationStatus {
+		case types.ApplicationStatusApplied:
+			applied++
+		case types.ApplicationStatusPending:
+			pending++
+		}
+	}
+	return
+}
+
+// TestCatchUp_BackdatedOneCycle verifies a grant backdated by 1 cycle applies immediately.
+func (s *CreditGrantServiceTestSuite) TestCatchUp_BackdatedOneCycle() {
+	ctx := s.GetContext()
+	backDate := s.testData.now.AddDate(0, 0, -1)
+
+	sub := s.createBackdatedSubscription("sub_catchup_1cycle", backDate)
+
+	resp, err := s.creditGrantService.CreateCreditGrant(ctx, dto.CreateCreditGrantRequest{
+		Name:           "Catch-up 1 Cycle",
+		Scope:          types.CreditGrantScopeSubscription,
+		Credits:        decimal.NewFromInt(100),
+		Cadence:        types.CreditGrantCadenceRecurring,
+		Period:         lo.ToPtr(types.CREDIT_GRANT_PERIOD_MONTHLY),
+		PeriodCount:    lo.ToPtr(1),
+		ExpirationType: types.CreditGrantExpiryTypeNever,
+		Priority:       lo.ToPtr(1),
+		StartDate:      &backDate,
+		SubscriptionID: &sub.ID,
+	})
+	s.NoError(err)
+
+	applied, pending := s.countCGAStatuses(resp.CreditGrant.ID)
+	s.Equal(1, applied, "expected 1 applied CGA for past cycle")
+	s.Equal(1, pending, "expected 1 pending CGA for upcoming cycle")
+}
+
+// TestCatchUp_BackdatedThreeCycles verifies all 3 past cycles are applied immediately.
+func (s *CreditGrantServiceTestSuite) TestCatchUp_BackdatedThreeCycles() {
+	ctx := s.GetContext()
+	backDate := s.testData.now.AddDate(0, -2, -15)
+
+	sub := s.createBackdatedSubscription("sub_catchup_3cycles", backDate)
+
+	resp, err := s.creditGrantService.CreateCreditGrant(ctx, dto.CreateCreditGrantRequest{
+		Name:           "Catch-up 3 Cycles",
+		Scope:          types.CreditGrantScopeSubscription,
+		Credits:        decimal.NewFromInt(50),
+		Cadence:        types.CreditGrantCadenceRecurring,
+		Period:         lo.ToPtr(types.CREDIT_GRANT_PERIOD_MONTHLY),
+		PeriodCount:    lo.ToPtr(1),
+		ExpirationType: types.CreditGrantExpiryTypeNever,
+		Priority:       lo.ToPtr(1),
+		StartDate:      &backDate,
+		SubscriptionID: &sub.ID,
+	})
+	s.NoError(err)
+
+	applied, pending := s.countCGAStatuses(resp.CreditGrant.ID)
+	s.Equal(3, applied, "expected 3 applied CGAs for 3 past cycles")
+	s.Equal(1, pending, "expected 1 pending CGA for upcoming cycle")
+}
+
+// TestCatchUp_FutureStartDate verifies a future-dated grant does not trigger catch-up.
+func (s *CreditGrantServiceTestSuite) TestCatchUp_FutureStartDate() {
+	ctx := s.GetContext()
+	futureDate := s.testData.now.AddDate(0, 1, 0)
+
+	sub := s.createBackdatedSubscription("sub_catchup_future", s.testData.now.AddDate(0, 0, -1))
+
+	resp, err := s.creditGrantService.CreateCreditGrant(ctx, dto.CreateCreditGrantRequest{
+		Name:           "Future Grant",
+		Scope:          types.CreditGrantScopeSubscription,
+		Credits:        decimal.NewFromInt(100),
+		Cadence:        types.CreditGrantCadenceRecurring,
+		Period:         lo.ToPtr(types.CREDIT_GRANT_PERIOD_MONTHLY),
+		PeriodCount:    lo.ToPtr(1),
+		ExpirationType: types.CreditGrantExpiryTypeNever,
+		Priority:       lo.ToPtr(1),
+		StartDate:      &futureDate,
+		SubscriptionID: &sub.ID,
+	})
+	s.NoError(err)
+
+	applied, pending := s.countCGAStatuses(resp.CreditGrant.ID)
+	s.Equal(0, applied, "expected no applied CGAs for future grant")
+	s.Equal(1, pending, "expected 1 pending CGA waiting for future schedule")
 }

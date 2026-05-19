@@ -296,7 +296,7 @@ func (s *taskService) updateTaskWithResults(ctx context.Context, id string, t *t
 			Mark(ierr.ErrValidation)
 	}
 
-	s.Logger.Infow("updated task with processing results",
+	s.Logger.InfowCtx(ctx, "updated task with processing results",
 		"task_id", id,
 		"processed_records", currentTask.ProcessedRecords,
 		"successful_records", currentTask.SuccessfulRecords,
@@ -787,17 +787,15 @@ func (p *PricesChunkProcessor) ProcessChunk(ctx context.Context, chunk [][]strin
 				priceReq.BillingPeriodCount = count
 			case "billing_model":
 				priceReq.BillingModel = types.BillingModel(value)
-			case "billing_cadence":
-				priceReq.BillingCadence = types.BillingCadence(value)
 			case "meter_id":
 				priceReq.MeterID = value
 			case "lookup_key":
 				priceReq.LookupKey = value
 			case "invoice_cadence":
 				priceReq.InvoiceCadence = types.InvoiceCadence(value)
-			case "trial_period":
+			case "trial_period_days", "trial_period":
 				trial, _ := strconv.Atoi(value)
-				priceReq.TrialPeriod = trial
+				priceReq.TrialPeriodDays = trial
 			case "description":
 				priceReq.Description = value
 			case "tier_mode":
@@ -1193,7 +1191,7 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	bucket := parts[0]
 	key := parts[1]
 
-	s.Logger.Infow("generating presigned URL for task file",
+	s.Logger.InfowCtx(ctx, "generating presigned URL for task file",
 		"task_id", id,
 		"bucket", bucket,
 		"key", key)
@@ -1211,7 +1209,7 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	// Get the scheduled task to find the connection
 	scheduledTask, err := s.ScheduledTaskRepo.Get(ctx, t.ScheduledTaskID)
 	if err != nil {
-		s.Logger.Errorw("failed to get scheduled task", "error", err, "scheduled_task_id", t.ScheduledTaskID)
+		s.Logger.ErrorwCtx(ctx, "failed to get scheduled task", "error", err, "scheduled_task_id", t.ScheduledTaskID)
 		return "", ierr.WithError(err).
 			WithHint("Failed to get scheduled task").
 			Mark(ierr.ErrNotFound)
@@ -1230,7 +1228,7 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	// Get the connection to determine if it's Flexprice-managed
 	conn, err := s.ConnectionRepo.Get(ctx, scheduledTask.ConnectionID)
 	if err != nil {
-		s.Logger.Errorw("failed to get connection", "error", err, "connection_id", scheduledTask.ConnectionID)
+		s.Logger.ErrorwCtx(ctx, "failed to get connection", "error", err, "connection_id", scheduledTask.ConnectionID)
 		return "", ierr.WithError(err).
 			WithHint("Failed to get connection").
 			Mark(ierr.ErrNotFound)
@@ -1242,7 +1240,7 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	// For Flexprice-managed, verify bucket matches config
 	if isFlexpriceManaged {
 		if bucket != s.Config.FlexpriceS3Exports.Bucket {
-			s.Logger.Warnw("bucket mismatch for Flexprice-managed export",
+			s.Logger.WarnwCtx(ctx, "bucket mismatch for Flexprice-managed export",
 				"expected_bucket", s.Config.FlexpriceS3Exports.Bucket,
 				"actual_bucket", bucket,
 				"task_id", id)
@@ -1257,14 +1255,14 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 		}
 	}
 
-	s.Logger.Debugw("generating presigned URL",
+	s.Logger.DebugwCtx(ctx, "generating presigned URL",
 		"connection_id", scheduledTask.ConnectionID,
 		"is_flexprice_managed", isFlexpriceManaged)
 
 	// Get the S3 integration which handles credential decryption
 	s3Integration, err := s.IntegrationFactory.GetS3Client(ctx)
 	if err != nil {
-		s.Logger.Errorw("failed to get S3 integration", "error", err)
+		s.Logger.ErrorwCtx(ctx, "failed to get S3 integration", "error", err)
 		return "", ierr.WithError(err).
 			WithHint("Failed to initialize S3 integration").
 			Mark(ierr.ErrInternal)
@@ -1298,7 +1296,7 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	// Get S3 client configured with connection-specific credentials
 	s3Client, _, err := s3Integration.GetS3Client(ctx, jobConfig, scheduledTask.ConnectionID)
 	if err != nil {
-		s.Logger.Errorw("failed to get S3 client with connection credentials", "error", err)
+		s.Logger.ErrorwCtx(ctx, "failed to get S3 client with connection credentials", "error", err)
 		return "", ierr.WithError(err).
 			WithHint("Failed to get S3 client with connection credentials").
 			Mark(ierr.ErrInternal)
@@ -1314,13 +1312,13 @@ func (s *taskService) GenerateDownloadURL(ctx context.Context, id string) (strin
 	}, s3.WithPresignExpires(30*time.Minute))
 
 	if err != nil {
-		s.Logger.Errorw("failed to generate presigned URL", "error", err)
+		s.Logger.ErrorwCtx(ctx, "failed to generate presigned URL", "error", err)
 		return "", ierr.WithError(err).
 			WithHint("Failed to generate presigned URL").
 			Mark(ierr.ErrInternal)
 	}
 
-	s.Logger.Infow("successfully generated presigned URL",
+	s.Logger.InfowCtx(ctx, "successfully generated presigned URL",
 		"task_id", id,
 		"connection_id", scheduledTask.ConnectionID,
 		"is_flexprice_managed", isFlexpriceManaged)

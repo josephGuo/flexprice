@@ -44,11 +44,11 @@ func (s *environmentService) CreateEnvironment(ctx context.Context, req dto.Crea
 
 	// Check environment limits for prod and sandbox environments
 	if envType == types.EnvironmentProduction || envType == types.EnvironmentDevelopment {
-		// Get env config with defaults (tenant-level, no environment_id)
-		envConfig, err := GetSetting[types.EnvConfig](
+		// Get tenant config with defaults (tenant-level, no environment_id)
+		tenantConfig, err := GetSetting[types.TenantConfig](
 			s.settingsService.(*settingsService),
 			ctx,
-			types.SettingKeyEnvConfig,
+			types.SettingKeyTenantConfig,
 		)
 		if err != nil {
 			return nil, err
@@ -63,9 +63,9 @@ func (s *environmentService) CreateEnvironment(ctx context.Context, req dto.Crea
 		// Determine the limit based on environment type
 		var limit int
 		if envType == types.EnvironmentProduction {
-			limit = envConfig.Production
+			limit = tenantConfig.Production
 		} else {
-			limit = envConfig.Development
+			limit = tenantConfig.Development
 		}
 
 		// Check if limit is reached
@@ -106,6 +106,10 @@ func (s *environmentService) GetEnvironment(ctx context.Context, id string) (*dt
 }
 
 func (s *environmentService) GetEnvironments(ctx context.Context, filter types.Filter) (*dto.ListEnvironmentsResponse, error) {
+
+	// explicitly set status to published
+	filter.Status = types.StatusPublished
+
 	environments, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -169,8 +173,10 @@ func (s *environmentService) UpdateEnvironment(ctx context.Context, id string, r
 	if req.Name != "" {
 		env.Name = req.Name
 	}
-	if req.Type != "" {
-		env.Type = types.EnvironmentType(req.Type)
+	if req.Type != "" && types.EnvironmentType(req.Type) != env.Type {
+		return nil, ierr.NewError("environment type cannot be changed").
+			WithHintf("type is immutable; current type is %q", env.Type).
+			Mark(ierr.ErrValidation)
 	}
 	env.UpdatedAt = time.Now()
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	ierr "github.com/flexprice/flexprice/internal/errors"
+	"github.com/flexprice/flexprice/internal/types"
 	webhookDto "github.com/flexprice/flexprice/internal/webhook/dto"
 )
 
@@ -18,7 +19,7 @@ func NewSubscriptionPayloadBuilder(services *Services) PayloadBuilder {
 	}
 }
 
-func (b SubscriptionPayloadBuilder) BuildPayload(ctx context.Context, eventType string, data json.RawMessage) (json.RawMessage, error) {
+func (b SubscriptionPayloadBuilder) BuildPayload(ctx context.Context, eventType types.WebhookEventName, data json.RawMessage) (json.RawMessage, error) {
 	// Validate input data
 	var parsedPayload webhookDto.InternalSubscriptionEvent
 
@@ -34,6 +35,9 @@ func (b SubscriptionPayloadBuilder) BuildPayload(ctx context.Context, eventType 
 	if err != nil {
 		return nil, err
 	}
+
+	// TODO: remove this once we have a proper way to handle too large json payloads
+	subscriptionData.Plan = nil
 
 	payload := webhookDto.NewSubscriptionWebhookPayload(subscriptionData, eventType)
 

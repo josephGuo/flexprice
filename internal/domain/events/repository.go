@@ -14,9 +14,11 @@ type Repository interface {
 	GetUsage(ctx context.Context, params *UsageParams) (*AggregationResult, error)
 	GetUsageWithFilters(ctx context.Context, params *UsageWithFiltersParams) ([]*AggregationResult, error)
 	GetEvents(ctx context.Context, params *GetEventsParams) ([]*Event, uint64, error)
+	GetEventByID(ctx context.Context, eventID string) (*Event, error)
 	FindUnprocessedEvents(ctx context.Context, params *FindUnprocessedEventsParams) ([]*Event, error)
 	FindUnprocessedEventsFromFeatureUsage(ctx context.Context, params *FindUnprocessedEventsParams) ([]*Event, error)
-	GetDistinctEventNames(ctx context.Context, externalCustomerID string, startTime, endTime time.Time) ([]string, error)
+	GetDistinctEventNames(ctx context.Context, externalCustomerIDs []string, startTime, endTime time.Time) ([]string, error)
+	GetDistinctExternalCustomerIDs(ctx context.Context, startTime, endTime time.Time) ([]string, error)
 
 	// Monitoring methods
 	GetTotalEventCount(ctx context.Context, startTime, endTime time.Time, windowSize types.WindowSize) (*EventCountResult, error)
@@ -52,6 +54,16 @@ type ProcessedEventRepository interface {
 	GetDetailedUsageAnalytics(ctx context.Context, params *UsageAnalyticsParams) ([]*DetailedUsageAnalytic, error)
 }
 
+// RawEventRepository defines operations for raw events
+type RawEventRepository interface {
+	// FindRawEvents finds raw events with filtering and keyset pagination
+	FindRawEvents(ctx context.Context, params *FindRawEventsParams) ([]*RawEvent, error)
+
+	// FindUnprocessedRawEvents finds raw events that haven't been processed yet
+	// Uses ANTI JOIN with feature_usage table to exclude already processed events
+	FindUnprocessedRawEvents(ctx context.Context, params *FindRawEventsParams) ([]*RawEvent, *KeysetCursor, error)
+}
+
 // Additional types needed for the new methods
 
 // PeriodFeatureTotal represents aggregated usage for a feature in a period
@@ -71,17 +83,18 @@ type UsageAnalytic struct {
 }
 
 type UsageParams struct {
-	ExternalCustomerID string                `json:"external_customer_id"`
-	CustomerID         string                `json:"customer_id"`
-	EventName          string                `json:"event_name" validate:"required"`
-	PropertyName       string                `json:"property_name" validate:"required"`
-	AggregationType    types.AggregationType `json:"aggregation_type" validate:"required"`
-	WindowSize         types.WindowSize      `json:"window_size"`
-	BucketSize         types.WindowSize      `json:"bucket_size,omitempty"` // For windowed MAX aggregation
-	StartTime          time.Time             `json:"start_time" validate:"required"`
-	EndTime            time.Time             `json:"end_time" validate:"required"`
-	Filters            map[string][]string   `json:"filters"`
-	Multiplier         *decimal.Decimal      `json:"multiplier,omitempty" validate:"omitempty,gt=0"`
+	ExternalCustomerID  string                `json:"external_customer_id"`
+	ExternalCustomerIDs []string              `json:"-" form:"-"`
+	CustomerID          string                `json:"customer_id"`
+	EventName           string                `json:"event_name" validate:"required"`
+	PropertyName        string                `json:"property_name" validate:"required"`
+	AggregationType     types.AggregationType `json:"aggregation_type" validate:"required"`
+	WindowSize          types.WindowSize      `json:"window_size"`
+	BucketSize          types.WindowSize      `json:"bucket_size,omitempty"` // For windowed MAX aggregation
+	StartTime           time.Time             `json:"start_time" validate:"required"`
+	EndTime             time.Time             `json:"end_time" validate:"required"`
+	Filters             map[string][]string   `json:"filters"`
+	Multiplier          *decimal.Decimal      `json:"multiplier,omitempty" validate:"omitempty,gt=0"`
 	// BillingAnchor enables custom monthly billing periods for usage aggregation.
 	//
 	// Behavior by WindowSize:
@@ -98,6 +111,11 @@ type UsageParams struct {
 	// - Custom business cycles (fiscal months, quarterly periods)
 	// - Multi-tenant billing with different anchor dates per customer
 	BillingAnchor *time.Time `json:"billing_anchor,omitempty"`
+	// GroupByProperty is the property name in event.properties to group by before aggregating.
+	// When set, aggregation is applied per unique value of this property within each bucket,
+	// then the per-group results are summed to produce the bucket total.
+	// Currently only supported for MAX aggregation with bucket_size.
+	GroupByProperty string `json:"group_by_property,omitempty"`
 }
 
 // UsageSummaryParams defines parameters for querying pre-computed usage
@@ -145,6 +163,7 @@ type GetEventsParams struct {
 type UsageResult struct {
 	WindowSize time.Time       `json:"window_size"`
 	Value      decimal.Decimal `json:"value"`
+	GroupKey   string          `json:"group_key,omitempty"` // group identifier when group_by is used (e.g., KRN value)
 }
 
 type AggregationResult struct {
@@ -199,6 +218,8 @@ type FeatureUsageParams struct {
 	PriceID       string `json:"price_id"`
 	MeterID       string `json:"meter_id"`
 	SubLineItemID string `json:"sub_line_item_id"`
+	// QuerySource: when InvoiceCreation, ClickHouse uses FINAL for ReplacingMergeTree deduplication; other sources do not.
+	Source types.UsageSource `json:"query_source,omitempty"`
 }
 
 // Cost Usage Params

@@ -19,6 +19,7 @@ import (
 	"github.com/flexprice/flexprice/internal/publisher"
 	"github.com/flexprice/flexprice/internal/sentry"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 	"github.com/sourcegraph/conc/pool"
 )
@@ -29,6 +30,8 @@ type EventService interface {
 	GetUsage(ctx context.Context, getUsageRequest *dto.GetUsageRequest) (*events.AggregationResult, error)
 	GetUsageByMeter(ctx context.Context, getUsageByMeterRequest *dto.GetUsageByMeterRequest) (*events.AggregationResult, error)
 	BulkGetUsageByMeter(ctx context.Context, req []*dto.GetUsageByMeterRequest) (map[string]*events.AggregationResult, error)
+	// BulkGetUsageByMeterSync fetches each meter sequentially; any failure returns (nil, err) with no partial map.
+	BulkGetUsageByMeterSync(ctx context.Context, req []*dto.GetUsageByMeterRequest) (map[string]*events.AggregationResult, error)
 	GetUsageByMeterWithFilters(ctx context.Context, req *dto.GetUsageByMeterRequest, filterGroups map[string]map[string][]string) ([]*events.AggregationResult, error)
 	GetEvents(ctx context.Context, req *dto.GetEventsRequest) (*dto.GetEventsResponse, error)
 	GetMonitoringData(ctx context.Context, req *dto.GetMonitoringDataRequest) (*dto.GetMonitoringDataResponse, error)
@@ -121,19 +124,29 @@ func (s *eventService) GetUsageByMeter(ctx context.Context, req *dto.GetUsageByM
 		m = req.Meter
 	}
 
+	// Merge single and multiple external customer IDs
+	externalCustomerIDs := make([]string, 0)
+	if req.ExternalCustomerID != "" {
+		externalCustomerIDs = append(externalCustomerIDs, req.ExternalCustomerID)
+	}
+	if len(req.ExternalCustomerIDs) > 0 {
+		externalCustomerIDs = append(externalCustomerIDs, req.ExternalCustomerIDs...)
+	}
+	externalCustomerIDs = lo.Uniq(externalCustomerIDs)
+
 	getUsageRequest := dto.GetUsageRequest{
-		ExternalCustomerID: req.ExternalCustomerID,
-		CustomerID:         req.CustomerID,
-		EventName:          m.EventName,
-		PropertyName:       m.Aggregation.Field,
-		AggregationType:    m.Aggregation.Type,
-		StartTime:          req.StartTime,
-		WindowSize:         req.WindowSize,
-		EndTime:            req.EndTime,
-		Filters:            req.Filters,
-		PriceID:            req.PriceID,
-		MeterID:            req.MeterID,
-		BillingAnchor:      req.BillingAnchor,
+		ExternalCustomerIDs: externalCustomerIDs,
+		CustomerID:          req.CustomerID,
+		EventName:           m.EventName,
+		PropertyName:        m.Aggregation.Field,
+		AggregationType:     m.Aggregation.Type,
+		StartTime:           req.StartTime,
+		WindowSize:          req.WindowSize,
+		EndTime:             req.EndTime,
+		Filters:             req.Filters,
+		PriceID:             req.PriceID,
+		MeterID:             req.MeterID,
+		BillingAnchor:       req.BillingAnchor,
 	}
 
 	// Pass the multiplier from meter configuration if it's a SUM_WITH_MULTIPLIER aggregation
@@ -149,6 +162,11 @@ func (s *eventService) GetUsageByMeter(ctx context.Context, req *dto.GetUsageByM
 	// Pass the bucket_size from meter configuration if it's a SUM aggregation with bucket_size set
 	if m.IsBucketedSumMeter() {
 		getUsageRequest.BucketSize = m.Aggregation.BucketSize
+	}
+
+	// Pass GroupByProperty from meter configuration for aggregation with group_by
+	if m.Aggregation.GroupBy != "" {
+		getUsageRequest.GroupByProperty = m.Aggregation.GroupBy
 	}
 
 	usage, err := s.GetUsage(ctx, &getUsageRequest)
@@ -180,13 +198,18 @@ func (s *eventService) BulkGetUsageByMeter(ctx context.Context, req []*dto.GetUs
 	sentrySvc := sentry.NewSentryService(s.config, s.logger)
 
 	// Get configuration values or use defaults
-	maxWorkers := 5
-	timeoutDuration := 3000 * time.Millisecond
+	// Reduced max workers and batch size to reduce ClickHouse CPU load
+	maxWorkers := 3
+	batchSize := 10
+	timeoutDuration := 10000 * time.Millisecond // Increased from 3s to 10s per meter
+	sleepBetweenBatches := 5 * time.Millisecond // 5ms sleep between batches
 
 	// Log the configuration being used
 	s.logger.With(
 		"max_workers", maxWorkers,
+		"batch_size", batchSize,
 		"per_meter_timeout_ms", timeoutDuration.Milliseconds(),
+		"sleep_between_batches_ms", sleepBetweenBatches.Milliseconds(),
 		"request_count", len(req),
 	).Info("starting parallel meter usage processing")
 
@@ -199,114 +222,145 @@ func (s *eventService) BulkGetUsageByMeter(ctx context.Context, req []*dto.GetUs
 	failureCount := 0
 	var countMu sync.Mutex
 
-	// Create a pool with maximum concurrency and error handling
-	p := pool.New().
-		WithContext(ctx).
-		WithMaxGoroutines(maxWorkers)
+	// Process requests in batches with sleep between batches to reduce ClickHouse load
+	for batchStart := 0; batchStart < len(req); batchStart += batchSize {
+		batchEnd := batchStart + batchSize
+		if batchEnd > len(req) {
+			batchEnd = len(req)
+		}
+		batch := req[batchStart:batchEnd]
 
-	// Process each meter request in parallel
-	for i, r := range req {
-		r := r // Capture for goroutine
-		meterIdx := i
-		meterID := r.MeterID
+		s.logger.With(
+			"batch_start", batchStart,
+			"batch_end", batchEnd,
+			"batch_size", len(batch),
+		).Debug("processing meter batch")
 
-		p.Go(func(ctx context.Context) error {
-			// For Sentry, follow concurrency best practices
-			// 1. Clone the hub for this goroutine
-			// 2. Create a transaction specifically for this meter
+		// Create a pool with maximum concurrency and error handling for this batch
+		p := pool.New().
+			WithContext(ctx).
+			WithMaxGoroutines(maxWorkers)
 
-			// Create a new transaction for this specific meter
-			var meterSpanFinisher *sentry.SpanFinisher
+		// Process each meter request in this batch in parallel
+		for i, r := range batch {
+			r := r // Capture for goroutine
+			meterIdx := batchStart + i
+			meterID := r.MeterID
 
-			// Create a description for this operation that includes meter details
-			operationName := "BulkGetUsageByMeter"
-			params := map[string]interface{}{
-				"meter_id":    meterID,
-				"meter_index": meterIdx,
-			}
+			p.Go(func(ctx context.Context) error {
+				// For Sentry, follow concurrency best practices
+				// 1. Clone the hub for this goroutine
+				// 2. Create a transaction specifically for this meter
 
-			// Start a repository span for this meter operation
-			span, spanCtx := sentrySvc.StartRepositorySpan(ctx, "GetUsageByMeter", operationName, params)
-			if span != nil {
-				ctx = spanCtx
-				meterSpanFinisher = &sentry.SpanFinisher{Span: span}
-				defer meterSpanFinisher.Finish()
-			}
+				// Create a new transaction for this specific meter
+				var meterSpanFinisher *sentry.SpanFinisher
 
-			// Check if context is already canceled before making the request
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+				// Create a description for this operation that includes meter details
+				operationName := "BulkGetUsageByMeter"
+				params := map[string]interface{}{
+					"meter_id":    meterID,
+					"meter_index": meterIdx,
+				}
 
-			// Record the start time for this meter
-			processingStart := time.Now()
+				// Start a repository span for this meter operation
+				span, spanCtx := sentrySvc.StartRepositorySpan(ctx, "GetUsageByMeter", operationName, params)
+				if span != nil {
+					ctx = spanCtx
+					meterSpanFinisher = &sentry.SpanFinisher{Span: span}
+					defer meterSpanFinisher.Finish()
+				}
 
-			// Create a timeout context for this specific request
-			reqCtx, reqCancel := context.WithTimeout(ctx, timeoutDuration)
-			defer reqCancel()
+				// Check if context is already canceled before making the request
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 
-			s.logger.With(
-				"meter_id", meterID,
-				"price_id", r.PriceID,
-				"meter_index", meterIdx,
-			).Debug("starting meter usage request")
+				// Record the start time for this meter
+				processingStart := time.Now()
 
-			result, err := s.GetUsageByMeter(reqCtx, r)
-
-			// Record processing time
-			processingDuration := time.Since(processingStart)
-
-			if err != nil {
-				// Track failure count
-				countMu.Lock()
-				failureCount++
-				countMu.Unlock()
+				// Create a timeout context for this specific request
+				reqCtx, reqCancel := context.WithTimeout(ctx, timeoutDuration)
+				defer reqCancel()
 
 				s.logger.With(
 					"meter_id", meterID,
 					"price_id", r.PriceID,
 					"meter_index", meterIdx,
-					"error", err,
-					"processing_time_ms", processingDuration.Milliseconds(),
-				).Warn("failed to get meter usage")
+				).Debug("starting meter usage request")
 
-				// Capture the error in Sentry if enabled
-				if sentrySvc != nil && sentrySvc.IsEnabled() {
-					sentrySvc.CaptureException(err)
+				result, err := s.GetUsageByMeter(reqCtx, r)
 
-					// Add breadcrumb about the failure
-					sentrySvc.AddBreadcrumb("meter_error", fmt.Sprintf("Failed to get usage for meter %s", meterID), map[string]interface{}{
-						"meter_id": meterID,
-						"price_id": r.PriceID,
-						"error":    err.Error(),
-					})
+				// Record processing time
+				processingDuration := time.Since(processingStart)
+
+				if err != nil {
+					// Track failure count
+					countMu.Lock()
+					failureCount++
+					countMu.Unlock()
+
+					s.logger.With(
+						"meter_id", meterID,
+						"price_id", r.PriceID,
+						"meter_index", meterIdx,
+						"error", err,
+						"processing_time_ms", processingDuration.Milliseconds(),
+					).Warn("failed to get meter usage")
+
+					// Capture the error in Sentry if enabled
+					if sentrySvc != nil && sentrySvc.IsEnabled() {
+						sentrySvc.CaptureException(err)
+
+						// Add breadcrumb about the failure
+						sentrySvc.AddBreadcrumb("meter_error", fmt.Sprintf("Failed to get usage for meter %s", meterID), map[string]interface{}{
+							"meter_id": meterID,
+							"price_id": r.PriceID,
+							"error":    err.Error(),
+						})
+					}
+
+					return err
 				}
 
-				return err
-			}
+				// Safely store result in map
+				resultsMu.Lock()
+				results[r.PriceID] = result
+				resultsMu.Unlock()
 
-			// Safely store result in map
-			resultsMu.Lock()
-			results[r.PriceID] = result
-			resultsMu.Unlock()
+				countMu.Lock()
+				successCount++
+				countMu.Unlock()
 
-			countMu.Lock()
-			successCount++
-			countMu.Unlock()
+				s.logger.With(
+					"meter_id", meterID,
+					"price_id", result.PriceID,
+					"meter_index", meterIdx,
+					"processing_time_ms", processingDuration.Milliseconds(),
+				).Debug("completed meter usage request")
 
+				return nil
+			})
+		}
+
+		// Wait for this batch to complete
+		err := p.Wait()
+		if err != nil {
 			s.logger.With(
-				"meter_id", meterID,
-				"price_id", result.PriceID,
-				"meter_index", meterIdx,
-				"processing_time_ms", processingDuration.Milliseconds(),
-			).Debug("completed meter usage request")
+				"batch_start", batchStart,
+				"batch_end", batchEnd,
+				"error", err,
+			).Warn("batch processing failed")
+			// Continue to process remaining batches even if one fails
+		}
 
-			return nil
-		})
+		// Add sleep between batches to reduce ClickHouse CPU load (except after last batch)
+		if batchEnd < len(req) {
+			s.logger.With(
+				"sleep_ms", sleepBetweenBatches.Milliseconds(),
+			).Debug("sleeping between batches")
+			time.Sleep(sleepBetweenBatches)
+		}
 	}
-
-	// Wait for all tasks to complete or context to timeout
-	err := p.Wait()
 
 	// Log statistics about the operation
 	s.logger.With(
@@ -315,15 +369,94 @@ func (s *eventService) BulkGetUsageByMeter(ctx context.Context, req []*dto.GetUs
 		"total_meters", len(req),
 	).Debug("completed parallel meter usage processing")
 
-	// If any goroutine failed or timed out, return an error
-	if err != nil {
-		return results, fmt.Errorf("one or more meter usage requests failed: %w", err)
-	}
-
-	// Defensive check: if failureCount > 0, return error even if p.Wait() didn't return one
+	// If any meters failed, return error
 	if failureCount > 0 {
 		return results, fmt.Errorf("one or more meter usage requests failed: %d out of %d meters failed", failureCount, len(req))
 	}
+
+	return results, nil
+}
+
+// BulkGetUsageByMeterSync fetches usage for each meter in order, one at a time.
+// On any error (including context cancellation or per-meter timeout), it returns (nil, err) with no partial results.
+func (s *eventService) BulkGetUsageByMeterSync(ctx context.Context, req []*dto.GetUsageByMeterRequest) (map[string]*events.AggregationResult, error) {
+	if len(req) == 0 {
+		return make(map[string]*events.AggregationResult), nil
+	}
+
+	sentrySvc := sentry.NewSentryService(s.config, s.logger)
+	timeoutDuration := 10 * time.Second
+
+	s.logger.With(
+		"per_meter_timeout_ms", timeoutDuration.Milliseconds(),
+		"request_count", len(req),
+	).Info("starting sequential meter usage processing")
+
+	results := make(map[string]*events.AggregationResult, len(req))
+
+	for i, r := range req {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		meterID := r.MeterID
+		params := map[string]interface{}{
+			"meter_id":    meterID,
+			"meter_index": i,
+		}
+
+		span, spanCtx := sentrySvc.StartRepositorySpan(ctx, "GetUsageByMeter", "BulkGetUsageByMeterSync", params)
+		callCtx := ctx
+		var spanFinisher *sentry.SpanFinisher
+		if span != nil {
+			callCtx = spanCtx
+			spanFinisher = &sentry.SpanFinisher{Span: span}
+		}
+
+		processingStart := time.Now()
+		reqCtx, reqCancel := context.WithTimeout(callCtx, timeoutDuration)
+		result, err := s.GetUsageByMeter(reqCtx, r)
+		reqCancel()
+		processingDuration := time.Since(processingStart)
+
+		if spanFinisher != nil {
+			spanFinisher.Finish()
+		}
+
+		if err != nil {
+			s.logger.With(
+				"meter_id", meterID,
+				"price_id", r.PriceID,
+				"meter_index", i,
+				"error", err,
+				"processing_time_ms", processingDuration.Milliseconds(),
+			).Warn("failed to get meter usage")
+
+			if sentrySvc != nil && sentrySvc.IsEnabled() {
+				sentrySvc.CaptureException(err)
+				sentrySvc.AddBreadcrumb("meter_error", fmt.Sprintf("Failed to get usage for meter %s", meterID), map[string]interface{}{
+					"meter_id": meterID,
+					"price_id": r.PriceID,
+					"error":    err.Error(),
+				})
+			}
+
+			return nil, fmt.Errorf("get usage by meter index %d price_id %s meter_id %s: %w", i, r.PriceID, r.MeterID, err)
+		}
+
+		results[r.PriceID] = result
+
+		s.logger.With(
+			"meter_id", meterID,
+			"price_id", result.PriceID,
+			"meter_index", i,
+			"processing_time_ms", processingDuration.Milliseconds(),
+		).Debug("completed meter usage request")
+	}
+
+	s.logger.With(
+		"total_meters", len(req),
+	).Debug("completed sequential meter usage processing")
 
 	return results, nil
 }
@@ -361,13 +494,14 @@ func (s *eventService) GetUsageByMeterWithFilters(ctx context.Context, req *dto.
 
 	params := &events.UsageWithFiltersParams{
 		UsageParams: &events.UsageParams{
-			EventName:          m.EventName,
-			PropertyName:       m.Aggregation.Field,
-			AggregationType:    m.Aggregation.Type,
-			ExternalCustomerID: req.ExternalCustomerID,
-			StartTime:          req.StartTime,
-			EndTime:            req.EndTime,
-			Filters:            meterFilters,
+			EventName:           m.EventName,
+			PropertyName:        m.Aggregation.Field,
+			AggregationType:     m.Aggregation.Type,
+			ExternalCustomerIDs: lo.Uniq(req.ExternalCustomerIDs),
+			CustomerID:          req.CustomerID,
+			StartTime:           req.StartTime,
+			EndTime:             req.EndTime,
+			Filters:             meterFilters,
 		},
 		FilterGroups: prioritizedGroups,
 	}

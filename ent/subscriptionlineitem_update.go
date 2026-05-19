@@ -287,25 +287,25 @@ func (_u *SubscriptionLineItemUpdate) SetNillableBillingPeriod(v *types.BillingP
 	return _u
 }
 
-// SetTrialPeriod sets the "trial_period" field.
-func (_u *SubscriptionLineItemUpdate) SetTrialPeriod(v int) *SubscriptionLineItemUpdate {
-	_u.mutation.ResetTrialPeriod()
-	_u.mutation.SetTrialPeriod(v)
-	return _u
+// SetBillingPeriodCount sets the "billing_period_count" field.
+func (sliu *SubscriptionLineItemUpdate) SetBillingPeriodCount(i int) *SubscriptionLineItemUpdate {
+	sliu.mutation.ResetBillingPeriodCount()
+	sliu.mutation.SetBillingPeriodCount(i)
+	return sliu
 }
 
-// SetNillableTrialPeriod sets the "trial_period" field if the given value is not nil.
-func (_u *SubscriptionLineItemUpdate) SetNillableTrialPeriod(v *int) *SubscriptionLineItemUpdate {
-	if v != nil {
-		_u.SetTrialPeriod(*v)
+// SetNillableBillingPeriodCount sets the "billing_period_count" field if the given value is not nil.
+func (sliu *SubscriptionLineItemUpdate) SetNillableBillingPeriodCount(i *int) *SubscriptionLineItemUpdate {
+	if i != nil {
+		sliu.SetBillingPeriodCount(*i)
 	}
-	return _u
+	return sliu
 }
 
-// AddTrialPeriod adds value to the "trial_period" field.
-func (_u *SubscriptionLineItemUpdate) AddTrialPeriod(v int) *SubscriptionLineItemUpdate {
-	_u.mutation.AddTrialPeriod(v)
-	return _u
+// AddBillingPeriodCount adds i to the "billing_period_count" field.
+func (sliu *SubscriptionLineItemUpdate) AddBillingPeriodCount(i int) *SubscriptionLineItemUpdate {
+	sliu.mutation.AddBillingPeriodCount(i)
+	return sliu
 }
 
 // SetStartDate sets the "start_date" field.
@@ -468,6 +468,26 @@ func (_u *SubscriptionLineItemUpdate) SetNillableCommitmentWindowed(v *bool) *Su
 	return _u
 }
 
+// SetCommitmentDuration sets the "commitment_duration" field.
+func (sliu *SubscriptionLineItemUpdate) SetCommitmentDuration(tp types.BillingPeriod) *SubscriptionLineItemUpdate {
+	sliu.mutation.SetCommitmentDuration(tp)
+	return sliu
+}
+
+// SetNillableCommitmentDuration sets the "commitment_duration" field if the given value is not nil.
+func (sliu *SubscriptionLineItemUpdate) SetNillableCommitmentDuration(tp *types.BillingPeriod) *SubscriptionLineItemUpdate {
+	if tp != nil {
+		sliu.SetCommitmentDuration(*tp)
+	}
+	return sliu
+}
+
+// ClearCommitmentDuration clears the value of the "commitment_duration" field.
+func (sliu *SubscriptionLineItemUpdate) ClearCommitmentDuration() *SubscriptionLineItemUpdate {
+	sliu.mutation.ClearCommitmentDuration()
+	return sliu
+}
+
 // AddCouponAssociationIDs adds the "coupon_associations" edge to the CouponAssociation entity by IDs.
 func (_u *SubscriptionLineItemUpdate) AddCouponAssociationIDs(ids ...string) *SubscriptionLineItemUpdate {
 	_u.mutation.AddCouponAssociationIDs(ids...)
@@ -567,6 +587,11 @@ func (_u *SubscriptionLineItemUpdate) check() error {
 			return &ValidationError{Name: "billing_period", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.billing_period": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.CommitmentDuration(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "commitment_duration", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.commitment_duration": %w`, err)}
+		}
+	}
 	if _u.mutation.SubscriptionCleared() && len(_u.mutation.SubscriptionIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "SubscriptionLineItem.subscription"`)
 	}
@@ -663,14 +688,14 @@ func (_u *SubscriptionLineItemUpdate) sqlSave(ctx context.Context) (_node int, e
 	if value, ok := _u.mutation.BillingPeriod(); ok {
 		_spec.SetField(subscriptionlineitem.FieldBillingPeriod, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.BillingPeriodCount(); ok {
+		_spec.SetField(subscriptionlineitem.FieldBillingPeriodCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedBillingPeriodCount(); ok {
+		_spec.AddField(subscriptionlineitem.FieldBillingPeriodCount, field.TypeInt, value)
+	}
 	if _u.mutation.InvoiceCadenceCleared() {
 		_spec.ClearField(subscriptionlineitem.FieldInvoiceCadence, field.TypeString)
-	}
-	if value, ok := _u.mutation.TrialPeriod(); ok {
-		_spec.SetField(subscriptionlineitem.FieldTrialPeriod, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.AddedTrialPeriod(); ok {
-		_spec.AddField(subscriptionlineitem.FieldTrialPeriod, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.StartDate(); ok {
 		_spec.SetField(subscriptionlineitem.FieldStartDate, field.TypeTime, value)
@@ -686,6 +711,9 @@ func (_u *SubscriptionLineItemUpdate) sqlSave(ctx context.Context) (_node int, e
 	}
 	if _u.mutation.SubscriptionPhaseIDCleared() {
 		_spec.ClearField(subscriptionlineitem.FieldSubscriptionPhaseID, field.TypeString)
+	}
+	if _u.mutation.AddonAssociationIDCleared() {
+		_spec.ClearField(subscriptionlineitem.FieldAddonAssociationID, field.TypeString)
 	}
 	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(subscriptionlineitem.FieldMetadata, field.TypeJSON, value)
@@ -722,6 +750,12 @@ func (_u *SubscriptionLineItemUpdate) sqlSave(ctx context.Context) (_node int, e
 	}
 	if value, ok := _u.mutation.CommitmentWindowed(); ok {
 		_spec.SetField(subscriptionlineitem.FieldCommitmentWindowed, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.CommitmentDuration(); ok {
+		_spec.SetField(subscriptionlineitem.FieldCommitmentDuration, field.TypeString, value)
+	}
+	if _u.mutation.CommitmentDurationCleared() {
+		_spec.ClearField(subscriptionlineitem.FieldCommitmentDuration, field.TypeString)
 	}
 	if _u.mutation.CouponAssociationsCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1044,25 +1078,25 @@ func (_u *SubscriptionLineItemUpdateOne) SetNillableBillingPeriod(v *types.Billi
 	return _u
 }
 
-// SetTrialPeriod sets the "trial_period" field.
-func (_u *SubscriptionLineItemUpdateOne) SetTrialPeriod(v int) *SubscriptionLineItemUpdateOne {
-	_u.mutation.ResetTrialPeriod()
-	_u.mutation.SetTrialPeriod(v)
-	return _u
+// SetBillingPeriodCount sets the "billing_period_count" field.
+func (sliuo *SubscriptionLineItemUpdateOne) SetBillingPeriodCount(i int) *SubscriptionLineItemUpdateOne {
+	sliuo.mutation.ResetBillingPeriodCount()
+	sliuo.mutation.SetBillingPeriodCount(i)
+	return sliuo
 }
 
-// SetNillableTrialPeriod sets the "trial_period" field if the given value is not nil.
-func (_u *SubscriptionLineItemUpdateOne) SetNillableTrialPeriod(v *int) *SubscriptionLineItemUpdateOne {
-	if v != nil {
-		_u.SetTrialPeriod(*v)
+// SetNillableBillingPeriodCount sets the "billing_period_count" field if the given value is not nil.
+func (sliuo *SubscriptionLineItemUpdateOne) SetNillableBillingPeriodCount(i *int) *SubscriptionLineItemUpdateOne {
+	if i != nil {
+		sliuo.SetBillingPeriodCount(*i)
 	}
-	return _u
+	return sliuo
 }
 
-// AddTrialPeriod adds value to the "trial_period" field.
-func (_u *SubscriptionLineItemUpdateOne) AddTrialPeriod(v int) *SubscriptionLineItemUpdateOne {
-	_u.mutation.AddTrialPeriod(v)
-	return _u
+// AddBillingPeriodCount adds i to the "billing_period_count" field.
+func (sliuo *SubscriptionLineItemUpdateOne) AddBillingPeriodCount(i int) *SubscriptionLineItemUpdateOne {
+	sliuo.mutation.AddBillingPeriodCount(i)
+	return sliuo
 }
 
 // SetStartDate sets the "start_date" field.
@@ -1225,6 +1259,26 @@ func (_u *SubscriptionLineItemUpdateOne) SetNillableCommitmentWindowed(v *bool) 
 	return _u
 }
 
+// SetCommitmentDuration sets the "commitment_duration" field.
+func (sliuo *SubscriptionLineItemUpdateOne) SetCommitmentDuration(tp types.BillingPeriod) *SubscriptionLineItemUpdateOne {
+	sliuo.mutation.SetCommitmentDuration(tp)
+	return sliuo
+}
+
+// SetNillableCommitmentDuration sets the "commitment_duration" field if the given value is not nil.
+func (sliuo *SubscriptionLineItemUpdateOne) SetNillableCommitmentDuration(tp *types.BillingPeriod) *SubscriptionLineItemUpdateOne {
+	if tp != nil {
+		sliuo.SetCommitmentDuration(*tp)
+	}
+	return sliuo
+}
+
+// ClearCommitmentDuration clears the value of the "commitment_duration" field.
+func (sliuo *SubscriptionLineItemUpdateOne) ClearCommitmentDuration() *SubscriptionLineItemUpdateOne {
+	sliuo.mutation.ClearCommitmentDuration()
+	return sliuo
+}
+
 // AddCouponAssociationIDs adds the "coupon_associations" edge to the CouponAssociation entity by IDs.
 func (_u *SubscriptionLineItemUpdateOne) AddCouponAssociationIDs(ids ...string) *SubscriptionLineItemUpdateOne {
 	_u.mutation.AddCouponAssociationIDs(ids...)
@@ -1335,6 +1389,11 @@ func (_u *SubscriptionLineItemUpdateOne) check() error {
 	if v, ok := _u.mutation.BillingPeriod(); ok {
 		if err := subscriptionlineitem.BillingPeriodValidator(string(v)); err != nil {
 			return &ValidationError{Name: "billing_period", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.billing_period": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.CommitmentDuration(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "commitment_duration", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.commitment_duration": %w`, err)}
 		}
 	}
 	if _u.mutation.SubscriptionCleared() && len(_u.mutation.SubscriptionIDs()) > 0 {
@@ -1450,14 +1509,14 @@ func (_u *SubscriptionLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Su
 	if value, ok := _u.mutation.BillingPeriod(); ok {
 		_spec.SetField(subscriptionlineitem.FieldBillingPeriod, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.BillingPeriodCount(); ok {
+		_spec.SetField(subscriptionlineitem.FieldBillingPeriodCount, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedBillingPeriodCount(); ok {
+		_spec.AddField(subscriptionlineitem.FieldBillingPeriodCount, field.TypeInt, value)
+	}
 	if _u.mutation.InvoiceCadenceCleared() {
 		_spec.ClearField(subscriptionlineitem.FieldInvoiceCadence, field.TypeString)
-	}
-	if value, ok := _u.mutation.TrialPeriod(); ok {
-		_spec.SetField(subscriptionlineitem.FieldTrialPeriod, field.TypeInt, value)
-	}
-	if value, ok := _u.mutation.AddedTrialPeriod(); ok {
-		_spec.AddField(subscriptionlineitem.FieldTrialPeriod, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.StartDate(); ok {
 		_spec.SetField(subscriptionlineitem.FieldStartDate, field.TypeTime, value)
@@ -1473,6 +1532,9 @@ func (_u *SubscriptionLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Su
 	}
 	if _u.mutation.SubscriptionPhaseIDCleared() {
 		_spec.ClearField(subscriptionlineitem.FieldSubscriptionPhaseID, field.TypeString)
+	}
+	if _u.mutation.AddonAssociationIDCleared() {
+		_spec.ClearField(subscriptionlineitem.FieldAddonAssociationID, field.TypeString)
 	}
 	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(subscriptionlineitem.FieldMetadata, field.TypeJSON, value)
@@ -1509,6 +1571,12 @@ func (_u *SubscriptionLineItemUpdateOne) sqlSave(ctx context.Context) (_node *Su
 	}
 	if value, ok := _u.mutation.CommitmentWindowed(); ok {
 		_spec.SetField(subscriptionlineitem.FieldCommitmentWindowed, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.CommitmentDuration(); ok {
+		_spec.SetField(subscriptionlineitem.FieldCommitmentDuration, field.TypeString, value)
+	}
+	if _u.mutation.CommitmentDurationCleared() {
+		_spec.ClearField(subscriptionlineitem.FieldCommitmentDuration, field.TypeString)
 	}
 	if _u.mutation.CouponAssociationsCleared() {
 		edge := &sqlgraph.EdgeSpec{

@@ -2,17 +2,17 @@ package types
 
 import "github.com/flexprice/flexprice/internal/pubsub"
 
-// PubSubType defines the type of pubsub implementation
-type PubSubType string
-
-const (
-	// MemoryPubSub uses in-memory implementation
-	MemoryPubSub PubSubType = "memory"
-
-	// KafkaPubSub uses Kafka implementation
-	KafkaPubSub PubSubType = "kafka"
-)
-
 type WalletBalanceAlertPubSub struct {
+	pubsub.PubSub
+}
+
+// IntegrationEventsPubSub is a named wrapper around pubsub.PubSub so FX can
+// inject it independently from the webhook consumer's pubsub.PubSub.
+type IntegrationEventsPubSub struct {
+	pubsub.PubSub
+}
+
+// UsageBenchmarkPubSub is a named wrapper so FX can inject it independently.
+type UsageBenchmarkPubSub struct {
 	pubsub.PubSub
 }

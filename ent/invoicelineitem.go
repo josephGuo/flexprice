@@ -77,6 +77,16 @@ type InvoiceLineItem struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 	// CommitmentInfo holds the value of the "commitment_info" field.
 	CommitmentInfo *types.CommitmentInfo `json:"commitment_info,omitempty"`
+	// Amount in invoice currency reduced from line item due to prepaid credits application
+	PrepaidCreditsApplied *decimal.Decimal `json:"prepaid_credits_applied,omitempty"`
+	// Discount amount in invoice currency applied to this line item
+	LineItemDiscount *decimal.Decimal `json:"line_item_discount,omitempty"`
+	// Discount amount in invoice currency applied to all line items on the invoice
+	InvoiceLevelDiscount *decimal.Decimal `json:"invoice_level_discount,omitempty"`
+	// ID of the subscription_line_item that generated this invoice line item
+	SubscriptionLineItemID *string `json:"subscription_line_item_id,omitempty"`
+	// Entitlement-covered units deducted from raw usage. Nil when no entitlement applied
+	AdjustedEntitlementQuantity *decimal.Decimal `json:"adjusted_entitlement_quantity,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the InvoiceLineItemQuery when eager-loading is set.
 	Edges        InvoiceLineItemEdges `json:"edges"`
@@ -119,13 +129,13 @@ func (*InvoiceLineItem) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case invoicelineitem.FieldPriceUnitAmount:
+		case invoicelineitem.FieldPriceUnitAmount, invoicelineitem.FieldPrepaidCreditsApplied, invoicelineitem.FieldLineItemDiscount, invoicelineitem.FieldInvoiceLevelDiscount, invoicelineitem.FieldAdjustedEntitlementQuantity:
 			values[i] = &sql.NullScanner{S: new(decimal.Decimal)}
 		case invoicelineitem.FieldMetadata, invoicelineitem.FieldCommitmentInfo:
 			values[i] = new([]byte)
 		case invoicelineitem.FieldAmount, invoicelineitem.FieldQuantity:
 			values[i] = new(decimal.Decimal)
-		case invoicelineitem.FieldID, invoicelineitem.FieldTenantID, invoicelineitem.FieldStatus, invoicelineitem.FieldCreatedBy, invoicelineitem.FieldUpdatedBy, invoicelineitem.FieldEnvironmentID, invoicelineitem.FieldInvoiceID, invoicelineitem.FieldCustomerID, invoicelineitem.FieldSubscriptionID, invoicelineitem.FieldEntityID, invoicelineitem.FieldEntityType, invoicelineitem.FieldPlanDisplayName, invoicelineitem.FieldPriceID, invoicelineitem.FieldPriceType, invoicelineitem.FieldMeterID, invoicelineitem.FieldMeterDisplayName, invoicelineitem.FieldPriceUnitID, invoicelineitem.FieldPriceUnit, invoicelineitem.FieldDisplayName, invoicelineitem.FieldCurrency:
+		case invoicelineitem.FieldID, invoicelineitem.FieldTenantID, invoicelineitem.FieldStatus, invoicelineitem.FieldCreatedBy, invoicelineitem.FieldUpdatedBy, invoicelineitem.FieldEnvironmentID, invoicelineitem.FieldInvoiceID, invoicelineitem.FieldCustomerID, invoicelineitem.FieldSubscriptionID, invoicelineitem.FieldEntityID, invoicelineitem.FieldEntityType, invoicelineitem.FieldPlanDisplayName, invoicelineitem.FieldPriceID, invoicelineitem.FieldPriceType, invoicelineitem.FieldMeterID, invoicelineitem.FieldMeterDisplayName, invoicelineitem.FieldPriceUnitID, invoicelineitem.FieldPriceUnit, invoicelineitem.FieldDisplayName, invoicelineitem.FieldCurrency, invoicelineitem.FieldSubscriptionLineItemID:
 			values[i] = new(sql.NullString)
 		case invoicelineitem.FieldCreatedAt, invoicelineitem.FieldUpdatedAt, invoicelineitem.FieldPeriodStart, invoicelineitem.FieldPeriodEnd:
 			values[i] = new(sql.NullTime)
@@ -336,6 +346,41 @@ func (_m *InvoiceLineItem) assignValues(columns []string, values []any) error {
 					return fmt.Errorf("unmarshal field commitment_info: %w", err)
 				}
 			}
+		case invoicelineitem.FieldPrepaidCreditsApplied:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field prepaid_credits_applied", values[i])
+			} else if value.Valid {
+				_m.PrepaidCreditsApplied = new(decimal.Decimal)
+				*_m.PrepaidCreditsApplied = *value.S.(*decimal.Decimal)
+			}
+		case invoicelineitem.FieldLineItemDiscount:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field line_item_discount", values[i])
+			} else if value.Valid {
+				_m.LineItemDiscount = new(decimal.Decimal)
+				*_m.LineItemDiscount = *value.S.(*decimal.Decimal)
+			}
+		case invoicelineitem.FieldInvoiceLevelDiscount:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field invoice_level_discount", values[i])
+			} else if value.Valid {
+				_m.InvoiceLevelDiscount = new(decimal.Decimal)
+				*_m.InvoiceLevelDiscount = *value.S.(*decimal.Decimal)
+			}
+		case invoicelineitem.FieldSubscriptionLineItemID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field subscription_line_item_id", values[i])
+			} else if value.Valid {
+				_m.SubscriptionLineItemID = new(string)
+				*_m.SubscriptionLineItemID = value.String
+			}
+		case invoicelineitem.FieldAdjustedEntitlementQuantity:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field adjusted_entitlement_quantity", values[i])
+			} else if value.Valid {
+				_m.AdjustedEntitlementQuantity = new(decimal.Decimal)
+				*_m.AdjustedEntitlementQuantity = *value.S.(*decimal.Decimal)
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -493,6 +538,31 @@ func (_m *InvoiceLineItem) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("commitment_info=")
 	builder.WriteString(fmt.Sprintf("%v", _m.CommitmentInfo))
+	builder.WriteString(", ")
+	if v := _m.PrepaidCreditsApplied; v != nil {
+		builder.WriteString("prepaid_credits_applied=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.LineItemDiscount; v != nil {
+		builder.WriteString("line_item_discount=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.InvoiceLevelDiscount; v != nil {
+		builder.WriteString("invoice_level_discount=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.SubscriptionLineItemID; v != nil {
+		builder.WriteString("subscription_line_item_id=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.AdjustedEntitlementQuantity; v != nil {
+		builder.WriteString("adjusted_entitlement_quantity=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

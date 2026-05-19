@@ -213,6 +213,27 @@ func (_u *PriceUpdate) ClearGroupID() *PriceUpdate {
 	return _u
 }
 
+// SetSequence sets the "sequence" field.
+func (pu *PriceUpdate) SetSequence(i int64) *PriceUpdate {
+	pu.mutation.ResetSequence()
+	pu.mutation.SetSequence(i)
+	return pu
+}
+
+// SetNillableSequence sets the "sequence" field if the given value is not nil.
+func (pu *PriceUpdate) SetNillableSequence(i *int64) *PriceUpdate {
+	if i != nil {
+		pu.SetSequence(*i)
+	}
+	return pu
+}
+
+// AddSequence adds i to the "sequence" field.
+func (pu *PriceUpdate) AddSequence(i int64) *PriceUpdate {
+	pu.mutation.AddSequence(i)
+	return pu
+}
+
 // AddCostsheetIDs adds the "costsheet" edge to the Costsheet entity by IDs.
 func (_u *PriceUpdate) AddCostsheetIDs(ids ...string) *PriceUpdate {
 	_u.mutation.AddCostsheetIDs(ids...)
@@ -403,6 +424,12 @@ func (_u *PriceUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.GroupIDCleared() {
 		_spec.ClearField(price.FieldGroupID, field.TypeString)
+	}
+	if value, ok := _u.mutation.Sequence(); ok {
+		_spec.SetField(price.FieldSequence, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSequence(); ok {
+		_spec.AddField(price.FieldSequence, field.TypeInt64, value)
 	}
 	if _u.mutation.CostsheetCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -653,6 +680,27 @@ func (_u *PriceUpdateOne) ClearGroupID() *PriceUpdateOne {
 	return _u
 }
 
+// SetSequence sets the "sequence" field.
+func (puo *PriceUpdateOne) SetSequence(i int64) *PriceUpdateOne {
+	puo.mutation.ResetSequence()
+	puo.mutation.SetSequence(i)
+	return puo
+}
+
+// SetNillableSequence sets the "sequence" field if the given value is not nil.
+func (puo *PriceUpdateOne) SetNillableSequence(i *int64) *PriceUpdateOne {
+	if i != nil {
+		puo.SetSequence(*i)
+	}
+	return puo
+}
+
+// AddSequence adds i to the "sequence" field.
+func (puo *PriceUpdateOne) AddSequence(i int64) *PriceUpdateOne {
+	puo.mutation.AddSequence(i)
+	return puo
+}
+
 // AddCostsheetIDs adds the "costsheet" edge to the Costsheet entity by IDs.
 func (_u *PriceUpdateOne) AddCostsheetIDs(ids ...string) *PriceUpdateOne {
 	_u.mutation.AddCostsheetIDs(ids...)
@@ -873,6 +921,12 @@ func (_u *PriceUpdateOne) sqlSave(ctx context.Context) (_node *Price, err error)
 	}
 	if _u.mutation.GroupIDCleared() {
 		_spec.ClearField(price.FieldGroupID, field.TypeString)
+	}
+	if value, ok := _u.mutation.Sequence(); ok {
+		_spec.SetField(price.FieldSequence, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSequence(); ok {
+		_spec.AddField(price.FieldSequence, field.TypeInt64, value)
 	}
 	if _u.mutation.CostsheetCleared() {
 		edge := &sqlgraph.EdgeSpec{

@@ -193,9 +193,9 @@ func InvoiceCadence(v types.InvoiceCadence) predicate.Price {
 	return predicate.Price(sql.FieldEQ(FieldInvoiceCadence, vc))
 }
 
-// TrialPeriod applies equality check predicate on the "trial_period" field. It's identical to TrialPeriodEQ.
-func TrialPeriod(v int) predicate.Price {
-	return predicate.Price(sql.FieldEQ(FieldTrialPeriod, v))
+// TrialPeriodDays applies equality check predicate on the "trial_period_days" field. It's identical to TrialPeriodDaysEQ.
+func TrialPeriodDays(v int) predicate.Price {
+	return predicate.Price(sql.FieldEQ(FieldTrialPeriodDays, v))
 }
 
 // MeterID applies equality check predicate on the "meter_id" field. It's identical to MeterIDEQ.
@@ -248,6 +248,11 @@ func EndDate(v time.Time) predicate.Price {
 // GroupID applies equality check predicate on the "group_id" field. It's identical to GroupIDEQ.
 func GroupID(v string) predicate.Price {
 	return predicate.Price(sql.FieldEQ(FieldGroupID, v))
+}
+
+// Sequence applies equality check predicate on the "sequence" field. It's identical to SequenceEQ.
+func Sequence(v int64) predicate.Price {
+	return predicate.Price(sql.FieldEQ(FieldSequence, v))
 }
 
 // TenantIDEQ applies the EQ predicate on the "tenant_id" field.
@@ -1869,44 +1874,44 @@ func InvoiceCadenceContainsFold(v types.InvoiceCadence) predicate.Price {
 	return predicate.Price(sql.FieldContainsFold(FieldInvoiceCadence, vc))
 }
 
-// TrialPeriodEQ applies the EQ predicate on the "trial_period" field.
-func TrialPeriodEQ(v int) predicate.Price {
-	return predicate.Price(sql.FieldEQ(FieldTrialPeriod, v))
+// TrialPeriodDaysEQ applies the EQ predicate on the "trial_period_days" field.
+func TrialPeriodDaysEQ(v int) predicate.Price {
+	return predicate.Price(sql.FieldEQ(FieldTrialPeriodDays, v))
 }
 
-// TrialPeriodNEQ applies the NEQ predicate on the "trial_period" field.
-func TrialPeriodNEQ(v int) predicate.Price {
-	return predicate.Price(sql.FieldNEQ(FieldTrialPeriod, v))
+// TrialPeriodDaysNEQ applies the NEQ predicate on the "trial_period_days" field.
+func TrialPeriodDaysNEQ(v int) predicate.Price {
+	return predicate.Price(sql.FieldNEQ(FieldTrialPeriodDays, v))
 }
 
-// TrialPeriodIn applies the In predicate on the "trial_period" field.
-func TrialPeriodIn(vs ...int) predicate.Price {
-	return predicate.Price(sql.FieldIn(FieldTrialPeriod, vs...))
+// TrialPeriodDaysIn applies the In predicate on the "trial_period_days" field.
+func TrialPeriodDaysIn(vs ...int) predicate.Price {
+	return predicate.Price(sql.FieldIn(FieldTrialPeriodDays, vs...))
 }
 
-// TrialPeriodNotIn applies the NotIn predicate on the "trial_period" field.
-func TrialPeriodNotIn(vs ...int) predicate.Price {
-	return predicate.Price(sql.FieldNotIn(FieldTrialPeriod, vs...))
+// TrialPeriodDaysNotIn applies the NotIn predicate on the "trial_period_days" field.
+func TrialPeriodDaysNotIn(vs ...int) predicate.Price {
+	return predicate.Price(sql.FieldNotIn(FieldTrialPeriodDays, vs...))
 }
 
-// TrialPeriodGT applies the GT predicate on the "trial_period" field.
-func TrialPeriodGT(v int) predicate.Price {
-	return predicate.Price(sql.FieldGT(FieldTrialPeriod, v))
+// TrialPeriodDaysGT applies the GT predicate on the "trial_period_days" field.
+func TrialPeriodDaysGT(v int) predicate.Price {
+	return predicate.Price(sql.FieldGT(FieldTrialPeriodDays, v))
 }
 
-// TrialPeriodGTE applies the GTE predicate on the "trial_period" field.
-func TrialPeriodGTE(v int) predicate.Price {
-	return predicate.Price(sql.FieldGTE(FieldTrialPeriod, v))
+// TrialPeriodDaysGTE applies the GTE predicate on the "trial_period_days" field.
+func TrialPeriodDaysGTE(v int) predicate.Price {
+	return predicate.Price(sql.FieldGTE(FieldTrialPeriodDays, v))
 }
 
-// TrialPeriodLT applies the LT predicate on the "trial_period" field.
-func TrialPeriodLT(v int) predicate.Price {
-	return predicate.Price(sql.FieldLT(FieldTrialPeriod, v))
+// TrialPeriodDaysLT applies the LT predicate on the "trial_period_days" field.
+func TrialPeriodDaysLT(v int) predicate.Price {
+	return predicate.Price(sql.FieldLT(FieldTrialPeriodDays, v))
 }
 
-// TrialPeriodLTE applies the LTE predicate on the "trial_period" field.
-func TrialPeriodLTE(v int) predicate.Price {
-	return predicate.Price(sql.FieldLTE(FieldTrialPeriod, v))
+// TrialPeriodDaysLTE applies the LTE predicate on the "trial_period_days" field.
+func TrialPeriodDaysLTE(v int) predicate.Price {
+	return predicate.Price(sql.FieldLTE(FieldTrialPeriodDays, v))
 }
 
 // MeterIDEQ applies the EQ predicate on the "meter_id" field.
@@ -2675,6 +2680,46 @@ func GroupIDEqualFold(v string) predicate.Price {
 // GroupIDContainsFold applies the ContainsFold predicate on the "group_id" field.
 func GroupIDContainsFold(v string) predicate.Price {
 	return predicate.Price(sql.FieldContainsFold(FieldGroupID, v))
+}
+
+// SequenceEQ applies the EQ predicate on the "sequence" field.
+func SequenceEQ(v int64) predicate.Price {
+	return predicate.Price(sql.FieldEQ(FieldSequence, v))
+}
+
+// SequenceNEQ applies the NEQ predicate on the "sequence" field.
+func SequenceNEQ(v int64) predicate.Price {
+	return predicate.Price(sql.FieldNEQ(FieldSequence, v))
+}
+
+// SequenceIn applies the In predicate on the "sequence" field.
+func SequenceIn(vs ...int64) predicate.Price {
+	return predicate.Price(sql.FieldIn(FieldSequence, vs...))
+}
+
+// SequenceNotIn applies the NotIn predicate on the "sequence" field.
+func SequenceNotIn(vs ...int64) predicate.Price {
+	return predicate.Price(sql.FieldNotIn(FieldSequence, vs...))
+}
+
+// SequenceGT applies the GT predicate on the "sequence" field.
+func SequenceGT(v int64) predicate.Price {
+	return predicate.Price(sql.FieldGT(FieldSequence, v))
+}
+
+// SequenceGTE applies the GTE predicate on the "sequence" field.
+func SequenceGTE(v int64) predicate.Price {
+	return predicate.Price(sql.FieldGTE(FieldSequence, v))
+}
+
+// SequenceLT applies the LT predicate on the "sequence" field.
+func SequenceLT(v int64) predicate.Price {
+	return predicate.Price(sql.FieldLT(FieldSequence, v))
+}
+
+// SequenceLTE applies the LTE predicate on the "sequence" field.
+func SequenceLTE(v int64) predicate.Price {
+	return predicate.Price(sql.FieldLTE(FieldSequence, v))
 }
 
 // HasCostsheet applies the HasEdge predicate on the "costsheet" edge.

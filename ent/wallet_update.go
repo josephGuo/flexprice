@@ -210,44 +210,24 @@ func (_u *WalletUpdate) ClearConfig() *WalletUpdate {
 	return _u
 }
 
-// SetAlertConfig sets the "alert_config" field.
-func (_u *WalletUpdate) SetAlertConfig(v types.AlertConfig) *WalletUpdate {
-	_u.mutation.SetAlertConfig(v)
-	return _u
+// SetAlertSettings sets the "alert_settings" field.
+func (wu *WalletUpdate) SetAlertSettings(ts types.AlertSettings) *WalletUpdate {
+	wu.mutation.SetAlertSettings(ts)
+	return wu
 }
 
-// SetNillableAlertConfig sets the "alert_config" field if the given value is not nil.
-func (_u *WalletUpdate) SetNillableAlertConfig(v *types.AlertConfig) *WalletUpdate {
-	if v != nil {
-		_u.SetAlertConfig(*v)
+// SetNillableAlertSettings sets the "alert_settings" field if the given value is not nil.
+func (wu *WalletUpdate) SetNillableAlertSettings(ts *types.AlertSettings) *WalletUpdate {
+	if ts != nil {
+		wu.SetAlertSettings(*ts)
 	}
-	return _u
+	return wu
 }
 
-// ClearAlertConfig clears the value of the "alert_config" field.
-func (_u *WalletUpdate) ClearAlertConfig() *WalletUpdate {
-	_u.mutation.ClearAlertConfig()
-	return _u
-}
-
-// SetAlertEnabled sets the "alert_enabled" field.
-func (_u *WalletUpdate) SetAlertEnabled(v bool) *WalletUpdate {
-	_u.mutation.SetAlertEnabled(v)
-	return _u
-}
-
-// SetNillableAlertEnabled sets the "alert_enabled" field if the given value is not nil.
-func (_u *WalletUpdate) SetNillableAlertEnabled(v *bool) *WalletUpdate {
-	if v != nil {
-		_u.SetAlertEnabled(*v)
-	}
-	return _u
-}
-
-// ClearAlertEnabled clears the value of the "alert_enabled" field.
-func (_u *WalletUpdate) ClearAlertEnabled() *WalletUpdate {
-	_u.mutation.ClearAlertEnabled()
-	return _u
+// ClearAlertSettings clears the value of the "alert_settings" field.
+func (wu *WalletUpdate) ClearAlertSettings() *WalletUpdate {
+	wu.mutation.ClearAlertSettings()
+	return wu
 }
 
 // SetAlertState sets the "alert_state" field.
@@ -328,9 +308,9 @@ func (_u *WalletUpdate) check() error {
 			return &ValidationError{Name: "config", err: fmt.Errorf(`ent: validator failed for field "Wallet.config": %w`, err)}
 		}
 	}
-	if v, ok := _u.mutation.AlertConfig(); ok {
+	if v, ok := _u.mutation.AlertSettings(); ok {
 		if err := v.Validate(); err != nil {
-			return &ValidationError{Name: "alert_config", err: fmt.Errorf(`ent: validator failed for field "Wallet.alert_config": %w`, err)}
+			return &ValidationError{Name: "alert_settings", err: fmt.Errorf(`ent: validator failed for field "Wallet.alert_settings": %w`, err)}
 		}
 	}
 	return nil
@@ -411,17 +391,11 @@ func (_u *WalletUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.ConfigCleared() {
 		_spec.ClearField(wallet.FieldConfig, field.TypeJSON)
 	}
-	if value, ok := _u.mutation.AlertConfig(); ok {
-		_spec.SetField(wallet.FieldAlertConfig, field.TypeJSON, value)
+	if value, ok := _u.mutation.AlertSettings(); ok {
+		_spec.SetField(wallet.FieldAlertSettings, field.TypeJSON, value)
 	}
-	if _u.mutation.AlertConfigCleared() {
-		_spec.ClearField(wallet.FieldAlertConfig, field.TypeJSON)
-	}
-	if value, ok := _u.mutation.AlertEnabled(); ok {
-		_spec.SetField(wallet.FieldAlertEnabled, field.TypeBool, value)
-	}
-	if _u.mutation.AlertEnabledCleared() {
-		_spec.ClearField(wallet.FieldAlertEnabled, field.TypeBool)
+	if _u.mutation.AlertSettingsCleared() {
+		_spec.ClearField(wallet.FieldAlertSettings, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.AlertState(); ok {
 		_spec.SetField(wallet.FieldAlertState, field.TypeString, value)
@@ -629,44 +603,24 @@ func (_u *WalletUpdateOne) ClearConfig() *WalletUpdateOne {
 	return _u
 }
 
-// SetAlertConfig sets the "alert_config" field.
-func (_u *WalletUpdateOne) SetAlertConfig(v types.AlertConfig) *WalletUpdateOne {
-	_u.mutation.SetAlertConfig(v)
-	return _u
+// SetAlertSettings sets the "alert_settings" field.
+func (wuo *WalletUpdateOne) SetAlertSettings(ts types.AlertSettings) *WalletUpdateOne {
+	wuo.mutation.SetAlertSettings(ts)
+	return wuo
 }
 
-// SetNillableAlertConfig sets the "alert_config" field if the given value is not nil.
-func (_u *WalletUpdateOne) SetNillableAlertConfig(v *types.AlertConfig) *WalletUpdateOne {
-	if v != nil {
-		_u.SetAlertConfig(*v)
+// SetNillableAlertSettings sets the "alert_settings" field if the given value is not nil.
+func (wuo *WalletUpdateOne) SetNillableAlertSettings(ts *types.AlertSettings) *WalletUpdateOne {
+	if ts != nil {
+		wuo.SetAlertSettings(*ts)
 	}
-	return _u
+	return wuo
 }
 
-// ClearAlertConfig clears the value of the "alert_config" field.
-func (_u *WalletUpdateOne) ClearAlertConfig() *WalletUpdateOne {
-	_u.mutation.ClearAlertConfig()
-	return _u
-}
-
-// SetAlertEnabled sets the "alert_enabled" field.
-func (_u *WalletUpdateOne) SetAlertEnabled(v bool) *WalletUpdateOne {
-	_u.mutation.SetAlertEnabled(v)
-	return _u
-}
-
-// SetNillableAlertEnabled sets the "alert_enabled" field if the given value is not nil.
-func (_u *WalletUpdateOne) SetNillableAlertEnabled(v *bool) *WalletUpdateOne {
-	if v != nil {
-		_u.SetAlertEnabled(*v)
-	}
-	return _u
-}
-
-// ClearAlertEnabled clears the value of the "alert_enabled" field.
-func (_u *WalletUpdateOne) ClearAlertEnabled() *WalletUpdateOne {
-	_u.mutation.ClearAlertEnabled()
-	return _u
+// ClearAlertSettings clears the value of the "alert_settings" field.
+func (wuo *WalletUpdateOne) ClearAlertSettings() *WalletUpdateOne {
+	wuo.mutation.ClearAlertSettings()
+	return wuo
 }
 
 // SetAlertState sets the "alert_state" field.
@@ -760,9 +714,9 @@ func (_u *WalletUpdateOne) check() error {
 			return &ValidationError{Name: "config", err: fmt.Errorf(`ent: validator failed for field "Wallet.config": %w`, err)}
 		}
 	}
-	if v, ok := _u.mutation.AlertConfig(); ok {
+	if v, ok := _u.mutation.AlertSettings(); ok {
 		if err := v.Validate(); err != nil {
-			return &ValidationError{Name: "alert_config", err: fmt.Errorf(`ent: validator failed for field "Wallet.alert_config": %w`, err)}
+			return &ValidationError{Name: "alert_settings", err: fmt.Errorf(`ent: validator failed for field "Wallet.alert_settings": %w`, err)}
 		}
 	}
 	return nil
@@ -860,17 +814,11 @@ func (_u *WalletUpdateOne) sqlSave(ctx context.Context) (_node *Wallet, err erro
 	if _u.mutation.ConfigCleared() {
 		_spec.ClearField(wallet.FieldConfig, field.TypeJSON)
 	}
-	if value, ok := _u.mutation.AlertConfig(); ok {
-		_spec.SetField(wallet.FieldAlertConfig, field.TypeJSON, value)
+	if value, ok := _u.mutation.AlertSettings(); ok {
+		_spec.SetField(wallet.FieldAlertSettings, field.TypeJSON, value)
 	}
-	if _u.mutation.AlertConfigCleared() {
-		_spec.ClearField(wallet.FieldAlertConfig, field.TypeJSON)
-	}
-	if value, ok := _u.mutation.AlertEnabled(); ok {
-		_spec.SetField(wallet.FieldAlertEnabled, field.TypeBool, value)
-	}
-	if _u.mutation.AlertEnabledCleared() {
-		_spec.ClearField(wallet.FieldAlertEnabled, field.TypeBool)
+	if _u.mutation.AlertSettingsCleared() {
+		_spec.ClearField(wallet.FieldAlertSettings, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.AlertState(); ok {
 		_spec.SetField(wallet.FieldAlertState, field.TypeString, value)

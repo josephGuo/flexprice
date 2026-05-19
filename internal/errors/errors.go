@@ -7,53 +7,70 @@ import (
 	"github.com/cockroachdb/errors"
 )
 
-// Common error types that can be used across the application
-// TODO: move to errors.New from cockroachdb/errors
-var (
-	ErrNotFound         = new(ErrCodeNotFound, "resource not found")
-	ErrAlreadyExists    = new(ErrCodeAlreadyExists, "resource already exists")
-	ErrVersionConflict  = new(ErrCodeVersionConflict, "version conflict")
-	ErrValidation       = new(ErrCodeValidation, "validation error")
-	ErrInvalidOperation = new(ErrCodeInvalidOperation, "invalid operation")
-	ErrPermissionDenied = new(ErrCodePermissionDenied, "permission denied")
-	ErrHTTPClient       = new(ErrCodeHTTPClient, "http client error")
-	ErrDatabase         = new(ErrCodeDatabase, "database error")
-	ErrSystem           = new(ErrCodeSystemError, "system error")
-	ErrInternal         = new(ErrCodeInternalError, "internal error")
-	// maps errors to http status codes
-	statusCodeMap = map[error]int{
-		ErrHTTPClient:       http.StatusInternalServerError,
-		ErrDatabase:         http.StatusInternalServerError,
-		ErrNotFound:         http.StatusNotFound,
-		ErrAlreadyExists:    http.StatusConflict,
-		ErrVersionConflict:  http.StatusConflict,
-		ErrValidation:       http.StatusBadRequest,
-		ErrInvalidOperation: http.StatusBadRequest,
-		ErrPermissionDenied: http.StatusForbidden,
-		ErrSystem:           http.StatusInternalServerError,
-		ErrInternal:         http.StatusInternalServerError,
-	}
-)
+// ErrorCode is the machine-readable error code returned in API responses.
+type ErrorCode string
 
 const (
-	ErrCodeHTTPClient       = "http_client_error"
-	ErrCodeSystemError      = "system_error"
-	ErrCodeInternalError    = "internal_error"
-	ErrCodeNotFound         = "not_found"
-	ErrCodeAlreadyExists    = "already_exists"
-	ErrCodeVersionConflict  = "version_conflict"
-	ErrCodeValidation       = "validation_error"
-	ErrCodeInvalidOperation = "invalid_operation"
-	ErrCodePermissionDenied = "permission_denied"
-	ErrCodeDatabase         = "database_error"
+	ErrCodeHTTPClient         ErrorCode = "http_client_error"
+	ErrCodeSystemError        ErrorCode = "system_error"
+	ErrCodeInternalError      ErrorCode = "internal_error"
+	ErrCodeNotFound           ErrorCode = "not_found"
+	ErrCodeAlreadyExists      ErrorCode = "already_exists"
+	ErrCodeVersionConflict    ErrorCode = "version_conflict"
+	ErrCodeValidation         ErrorCode = "validation_error"
+	ErrCodeInvalidOperation   ErrorCode = "invalid_operation"
+	ErrCodePermissionDenied   ErrorCode = "permission_denied"
+	ErrCodeDatabase           ErrorCode = "database_error"
+	ErrCodeServiceUnavailable ErrorCode = "service_unavailable"
+	ErrCodeTooManyRequests    ErrorCode = "too_many_requests"
+)
+
+// errorMapping holds both the HTTP status and machine-readable code for a
+// sentinel error. Single source of truth — one iteration resolves both.
+type errorMapping struct {
+	Status int
+	Code   ErrorCode
+}
+
+// Common error types that can be used across the application
+var (
+	ErrNotFound           = new(ErrCodeNotFound, "resource not found")
+	ErrAlreadyExists      = new(ErrCodeAlreadyExists, "resource already exists")
+	ErrVersionConflict    = new(ErrCodeVersionConflict, "version conflict")
+	ErrValidation         = new(ErrCodeValidation, "validation error")
+	ErrInvalidOperation   = new(ErrCodeInvalidOperation, "invalid operation")
+	ErrPermissionDenied   = new(ErrCodePermissionDenied, "permission denied")
+	ErrHTTPClient         = new(ErrCodeHTTPClient, "http client error")
+	ErrDatabase           = new(ErrCodeDatabase, "database error")
+	ErrSystem             = new(ErrCodeSystemError, "system error")
+	ErrInternal           = new(ErrCodeInternalError, "internal error")
+	ErrServiceUnavailable = new(ErrCodeServiceUnavailable, "service unavailable")
+	ErrTooManyRequests    = new(ErrCodeTooManyRequests, "too many requests")
+
+	// errMappings is the single map that ties sentinel → (HTTP status, error code).
+	// ResolveError iterates this once to get both values.
+	errMappings = map[error]errorMapping{
+		ErrNotFound:           {http.StatusNotFound, ErrCodeNotFound},
+		ErrAlreadyExists:      {http.StatusConflict, ErrCodeAlreadyExists},
+		ErrVersionConflict:    {http.StatusConflict, ErrCodeVersionConflict},
+		ErrValidation:         {http.StatusBadRequest, ErrCodeValidation},
+		ErrInvalidOperation:   {http.StatusBadRequest, ErrCodeInvalidOperation},
+		ErrPermissionDenied:   {http.StatusForbidden, ErrCodePermissionDenied},
+		ErrHTTPClient:         {http.StatusInternalServerError, ErrCodeHTTPClient},
+		ErrDatabase:           {http.StatusInternalServerError, ErrCodeDatabase},
+		ErrSystem:             {http.StatusInternalServerError, ErrCodeSystemError},
+		ErrInternal:           {http.StatusInternalServerError, ErrCodeInternalError},
+		ErrServiceUnavailable: {http.StatusServiceUnavailable, ErrCodeServiceUnavailable},
+		ErrTooManyRequests:    {http.StatusTooManyRequests, ErrCodeTooManyRequests},
+	}
 )
 
 // InternalError represents a domain error
 type InternalError struct {
-	Code    string // Machine-readable error code
-	Message string // Human-readable error message
-	Op      string // Logical operation name
-	Err     error  // Underlying error
+	Code    ErrorCode // Machine-readable error code
+	Message string    // Human-readable error message
+	Op      string    // Logical operation name
+	Err     error     // Underlying error
 }
 
 func (e *InternalError) Error() string {
@@ -86,7 +103,7 @@ func (e *InternalError) Is(target error) bool {
 }
 
 // New creates a new InternalError
-func new(code string, message string) *InternalError {
+func new(code ErrorCode, message string) *InternalError {
 	return &InternalError{
 		Code:    code,
 		Message: message,
@@ -144,11 +161,23 @@ func IsHTTPClient(err error) bool {
 	return errors.Is(err, ErrHTTPClient)
 }
 
-func HTTPStatusFromErr(err error) int {
-	for e, status := range statusCodeMap {
-		if errors.Is(err, e) {
-			return status
+// IsServiceUnavailable checks if an error is a service unavailable error
+func IsServiceUnavailable(err error) bool {
+	return errors.Is(err, ErrServiceUnavailable)
+}
+
+// IsTooManyRequests checks if an error is a rate-limit / 429 style error
+func IsTooManyRequests(err error) bool {
+	return errors.Is(err, ErrTooManyRequests)
+}
+
+// ResolveError returns both the HTTP status code and machine-readable error
+// code for the given error in a single pass over errMappings.
+func ResolveError(err error) (httpStatus int, code ErrorCode) {
+	for sentinel, m := range errMappings {
+		if errors.Is(err, sentinel) {
+			return m.Status, m.Code
 		}
 	}
-	return http.StatusInternalServerError
+	return http.StatusInternalServerError, ErrCodeInternalError
 }

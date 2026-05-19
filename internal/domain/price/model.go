@@ -1,6 +1,7 @@
 package price
 
 import (
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,9 @@ import (
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
 )
+
+// max active prices per entity is 3000
+const MAX_ACTIVE_PRICES = 3000
 
 // JSONB types for complex fields
 // JSONBTiers are the tiers for the price when BillingModel is TIERED
@@ -80,9 +84,9 @@ type Price struct {
 
 	InvoiceCadence types.InvoiceCadence `db:"invoice_cadence" json:"invoice_cadence"`
 
-	// TrialPeriod is the number of days for the trial period
+	// TrialPeriodDays is the number of days for the trial period
 	// Note: This is only applicable for recurring prices (BILLING_CADENCE_RECURRING)
-	TrialPeriod int `db:"trial_period" json:"trial_period"`
+	TrialPeriodDays int `db:"trial_period_days" json:"trial_period_days"`
 
 	TierMode types.BillingTier `db:"tier_mode" json:"tier_mode,omitempty"`
 
@@ -125,7 +129,75 @@ type Price struct {
 	// EndDate is the end date of the price
 	EndDate *time.Time `db:"end_date" json:"end_date,omitempty"`
 
+	// Sequence is the monotonic stamp bumped on every state change that
+	// subscription line items need to react to. Read by the plan-price sync;
+	// set by the database (DEFAULT nextval) on create and by the price
+	// repository on termination / compatibility-affecting edits.
+	Sequence int64 `db:"sequence" json:"sequence,omitempty"`
+
 	types.BaseModel
+}
+
+// PriceCloneOverrides holds optional overrides for CopyWith. Nil fields mean "keep existing value".
+type PriceCloneOverrides struct {
+	ID            *string
+	EntityType    *types.PriceEntityType
+	EntityID      *string
+	LookupKey     *string
+	ParentPriceID *string // nil = clear (e.g. for clones); non-nil = set value
+	GroupID       *string // nil = keep existing; non-nil = set value
+	MeterID       *string // nil = keep existing; non-nil = remap (e.g. cross-env clone)
+	EnvironmentID *string // nil = derive from ctx; non-nil = use explicit value
+	BaseModel     *types.BaseModel
+}
+
+// CopyWith returns a shallow copy of the price with optional overrides applied.
+// Pointer fields on the original (StartDate, EndDate, MinQuantity, etc.) are shallow-copied.
+// If BaseModel is not in overrides, uses types.GetDefaultBaseModel(ctx).
+func (p *Price) CopyWith(ctx context.Context, overrides *PriceCloneOverrides) *Price {
+	if p == nil {
+		return nil
+	}
+	out := lo.FromPtr(p)
+	if overrides == nil {
+		return lo.ToPtr(out)
+	}
+	if overrides.ID != nil {
+		out.ID = lo.FromPtr(overrides.ID)
+	}
+	if overrides.EntityType != nil {
+		out.EntityType = lo.FromPtr(overrides.EntityType)
+	}
+	if overrides.EntityID != nil {
+		out.EntityID = lo.FromPtr(overrides.EntityID)
+	}
+	if overrides.LookupKey != nil {
+		out.LookupKey = lo.FromPtr(overrides.LookupKey)
+	}
+	if overrides.BaseModel != nil {
+		out.BaseModel = lo.FromPtr(overrides.BaseModel)
+	} else {
+		out.BaseModel = types.GetDefaultBaseModel(ctx)
+	}
+	// EnvironmentID is NOT part of BaseModel — set explicitly or fall back to context
+	if overrides.EnvironmentID != nil {
+		out.EnvironmentID = lo.FromPtr(overrides.EnvironmentID)
+	} else {
+		out.EnvironmentID = types.GetEnvironmentID(ctx)
+	}
+	if overrides.ParentPriceID != nil {
+		out.ParentPriceID = lo.FromPtr(overrides.ParentPriceID)
+	} else {
+		out.ParentPriceID = "" // clear so cloned prices do not retain source lineage
+	}
+	if overrides.GroupID != nil {
+		out.GroupID = lo.FromPtr(overrides.GroupID)
+	}
+	if overrides.MeterID != nil {
+		out.MeterID = lo.FromPtr(overrides.MeterID)
+	}
+
+	return lo.ToPtr(out)
 }
 
 // IsUsage returns true if the price is a usage based price
@@ -418,7 +490,7 @@ func FromEnt(e *ent.Price) *Price {
 		DisplayName:            e.DisplayName,
 		BillingCadence:         e.BillingCadence,
 		InvoiceCadence:         e.InvoiceCadence,
-		TrialPeriod:            e.TrialPeriod,
+		TrialPeriodDays:        e.TrialPeriodDays,
 		TierMode:               lo.FromPtr(e.TierMode),
 		Tiers:                  tiers,
 		PriceUnitTiers:         priceUnitTiers,
@@ -439,6 +511,7 @@ func FromEnt(e *ent.Price) *Price {
 		GroupID:                lo.FromPtr(e.GroupID),
 		StartDate:              e.StartDate,
 		EndDate:                e.EndDate,
+		Sequence:               e.Sequence,
 		MinQuantity:            e.MinQuantity,
 		BaseModel: types.BaseModel{
 			TenantID:  e.TenantID,
@@ -485,21 +558,20 @@ func (p *Price) ToEntTiers() []*types.PriceTier {
 	return ToEntTiersFromJSONB(p.Tiers)
 }
 
-// ValidateTrialPeriod checks if trial period is valid
-func (p *Price) ValidateTrialPeriod() error {
+// ValidateTrialPeriodDays checks if trial period days is valid
+func (p *Price) ValidateTrialPeriodDays() error {
 	// Trial period should be non-negative
-	if p.TrialPeriod < 0 {
-		return ierr.NewError("trial period must be non-negative").
-			WithHint("Trial period must be non-negative").
+	if p.TrialPeriodDays < 0 {
+		return ierr.NewError("trial_period_days must be non-negative").
+			WithHint("trial_period_days must be non-negative").
 			Mark(ierr.ErrValidation)
 	}
 
 	// Trial period should only be set for recurring fixed prices
-	if p.TrialPeriod > 0 &&
-		p.BillingCadence != types.BILLING_CADENCE_RECURRING &&
-		p.Type != types.PRICE_TYPE_FIXED {
-		return ierr.NewError("trial period can only be set for recurring fixed prices").
-			WithHint("Trial period can only be set for recurring fixed prices").
+	if p.TrialPeriodDays > 0 &&
+		(p.BillingCadence != types.BILLING_CADENCE_RECURRING || p.Type != types.PRICE_TYPE_FIXED) {
+		return ierr.NewError("trial_period_days can only be set for recurring fixed prices").
+			WithHint("trial_period_days can only be set for recurring fixed prices").
 			Mark(ierr.ErrValidation)
 	}
 
@@ -508,7 +580,20 @@ func (p *Price) ValidateTrialPeriod() error {
 
 // ValidateInvoiceCadence checks if invoice cadence is valid
 func (p *Price) ValidateInvoiceCadence() error {
-	return p.InvoiceCadence.Validate()
+	if err := p.InvoiceCadence.Validate(); err != nil {
+		return err
+	}
+	if p.Type == types.PRICE_TYPE_USAGE && p.InvoiceCadence == types.InvoiceCadenceAdvance {
+		return ierr.NewError("ADVANCE invoice cadence is not supported for USAGE price type").
+			WithHint("Please use ARREAR invoice cadence for USAGE price type").
+			WithReportableDetails(map[string]any{
+				"price_type":      p.Type,
+				"invoice_cadence": p.InvoiceCadence,
+				"allowed":         []types.InvoiceCadence{types.InvoiceCadenceArrear},
+			}).
+			Mark(ierr.ErrValidation)
+	}
+	return nil
 }
 
 // ValidateEntityType checks if entity type is valid
@@ -522,7 +607,7 @@ func (p *Price) Validate() error {
 		return err
 	}
 
-	if err := p.ValidateTrialPeriod(); err != nil {
+	if err := p.ValidateTrialPeriodDays(); err != nil {
 		return err
 	}
 

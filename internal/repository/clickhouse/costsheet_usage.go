@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -263,7 +262,7 @@ func (r *CostSheetUsageRepository) GetProcessedEvents(ctx context.Context, param
 	return eventsList, totalCount, nil
 }
 
-// GetFeatureUsageBySubscription gets usage data for a subscription using a single optimized query
+// GetUsageByCostSheetID gets usage data for a cost sheet using a single optimized query.
 func (r *CostSheetUsageRepository) GetUsageByCostSheetID(ctx context.Context, costSheetID, externalCustomerID string, startTime, endTime time.Time) (map[string]*events.UsageByCostSheetResult, error) {
 	// Extract tenantID and environmentID from context
 	tenantID := types.GetTenantID(ctx)
@@ -302,8 +301,13 @@ func (r *CostSheetUsageRepository) GetUsageByCostSheetID(ctx context.Context, co
 		GROUP BY feature_id, meter_id, price_id
 	`
 
-	log.Printf("Executing query: %s", query)
-	log.Printf("Params: %v", []interface{}{costSheetID, externalCustomerID, environmentID, tenantID, startTime, endTime})
+	r.logger.Debugw("executing cost sheet usage query",
+		"cost_sheet_id", costSheetID,
+		"external_customer_id", externalCustomerID,
+		"environment_id", environmentID,
+		"start_time", startTime,
+		"end_time", endTime,
+	)
 
 	rows, err := r.store.GetConn().Query(ctx, query, costSheetID, externalCustomerID, environmentID, tenantID, startTime, endTime)
 	if err != nil {

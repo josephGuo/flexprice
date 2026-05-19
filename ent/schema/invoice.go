@@ -49,6 +49,16 @@ func (Invoice) Fields() []ent.Field {
 			}).
 			Optional().
 			Nillable(),
+
+		field.String("subscription_customer_id").
+			SchemaType(map[string]string{
+				"postgres": "varchar(50)",
+			}).
+			Optional().
+			Nillable().
+			Immutable().
+			Comment("Subscription owner customer ID; set internally for subscription invoices"),
+
 		field.String("invoice_type").
 			SchemaType(map[string]string{
 				"postgres": "varchar(50)",
@@ -147,6 +157,12 @@ func (Invoice) Fields() []ent.Field {
 		field.Time("finalized_at").
 			Optional().
 			Nillable(),
+		field.Time("issue_date").
+			Optional().
+			Nillable(),
+		field.Time("last_computed_at").
+			Optional().
+			Nillable(),
 		field.String("billing_period").
 			Optional().
 			Nillable().
@@ -186,6 +202,17 @@ func (Invoice) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Sequence number for subscription billing periods"),
+
+		field.Other("total_prepaid_credits_applied", decimal.Decimal{}).
+			SchemaType(map[string]string{
+				"postgres": "numeric(20,8)",
+			}).
+			// TODO: remove optional and nillable after migration
+			Optional().
+			Nillable().
+			Default(decimal.Zero).
+			Comment("Total prepaid credits applied to this invoice"),
+
 		field.String("idempotency_key").
 			SchemaType(map[string]string{
 				"postgres": "varchar(100)",
@@ -193,6 +220,11 @@ func (Invoice) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Key for ensuring idempotent invoice creation"),
+
+		field.String("recalculated_invoice_id").
+			Optional().
+			Nillable().
+			Comment("ID of the replacement invoice created when this invoice was recalculated after voiding"),
 	}
 }
 
@@ -227,7 +259,7 @@ func (Invoice) Indexes() []ent.Index {
 		index.Fields("tenant_id", "environment_id", "idempotency_key").
 			Unique().
 			StorageKey(Idx_tenant_environment_idempotency_key_unique).
-			Annotations(entsql.IndexWhere("idempotency_key IS NOT NULL")),
+			Annotations(entsql.IndexWhere("((idempotency_key IS NOT NULL) AND ((status)::text = 'published'::text) AND ((invoice_status)::text <> 'VOIDED'::text))")),
 		index.Fields("subscription_id", "period_start", "period_end").
 			StorageKey("idx_subscription_period_unique").
 			Annotations(entsql.IndexWhere("invoice_status != 'VOIDED' AND subscription_id IS NOT NULL")),

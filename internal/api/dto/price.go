@@ -24,12 +24,11 @@ type CreatePriceRequest struct {
 	BillingPeriod      types.BillingPeriod      `json:"billing_period" validate:"required"`
 	BillingPeriodCount int                      `json:"billing_period_count" default:"1"`
 	BillingModel       types.BillingModel       `json:"billing_model" validate:"required"`
-	BillingCadence     types.BillingCadence     `json:"billing_cadence" validate:"required"`
 	MeterID            string                   `json:"meter_id,omitempty"`
 	FilterValues       map[string][]string      `json:"filter_values,omitempty"`
 	LookupKey          string                   `json:"lookup_key,omitempty"`
 	InvoiceCadence     types.InvoiceCadence     `json:"invoice_cadence" validate:"required"`
-	TrialPeriod        int                      `json:"trial_period"`
+	TrialPeriodDays    int                      `json:"trial_period_days"`
 	Description        string                   `json:"description,omitempty"`
 	Metadata           map[string]string        `json:"metadata,omitempty"`
 	TierMode           types.BillingTier        `json:"tier_mode,omitempty"`
@@ -105,8 +104,11 @@ type UpdatePriceRequest struct {
 	// PriceUnitTiers are the price unit tiers (for CUSTOM price unit type, TIERED billing model)
 	PriceUnitTiers []CreatePriceTier `json:"price_unit_tiers,omitempty"`
 
-	// GroupID is the id of the group to update the price in
-	GroupID string `json:"group_id,omitempty"`
+	// GroupID is the id of the group to update the price in.
+	// If not provided (nil), the group will not be changed
+	// If provided as empty string (""), the group will be removed (price will be ungrouped)
+	// If provided as a group ID, the price will be assigned to that group (must exist and be published)
+	GroupID *string `json:"group_id,omitempty"`
 }
 
 type PriceResponse struct {
@@ -119,7 +121,7 @@ type PriceResponse struct {
 }
 
 // ListPricesResponse represents the response for listing prices
-type ListPricesResponse = types.ListResponse[*PriceResponse]
+type ListPricesResponse = types.ListResponse[*PriceResponse] // @name ListPricesResponse
 
 // CreateBulkPriceRequest represents the request to create multiple prices in bulk
 type CreateBulkPriceRequest struct {
@@ -212,9 +214,6 @@ func (r *CreatePriceRequest) Validate() error {
 		return err
 	}
 	if err := r.BillingModel.Validate(); err != nil {
-		return err
-	}
-	if err := r.BillingCadence.Validate(); err != nil {
 		return err
 	}
 	if err := r.BillingPeriod.Validate(); err != nil {
@@ -352,44 +351,41 @@ func (r *CreatePriceRequest) Validate() error {
 		}
 	}
 
-	// 9. Validate billing cadence specific requirements
-	switch r.BillingCadence {
-	case types.BILLING_CADENCE_RECURRING:
-		if r.BillingPeriod == "" {
-			return ierr.NewError("billing_period is required when billing_cadence is RECURRING").
-				WithHint("Please select a billing period to set up recurring pricing").
+	// 9. Validate billing period requirements
+	// billing_cadence is always RECURRING; billing_period drives one-time vs recurring
+	if r.BillingPeriod == "" {
+		return ierr.NewError("billing_period is required").
+			WithHint("Please select a billing period (e.g. MONTHLY, ANNUAL, ONETIME)").
+			Mark(ierr.ErrValidation)
+	}
+	if r.BillingPeriod == types.BILLING_PERIOD_ONETIME {
+		if r.InvoiceCadence != "" && r.InvoiceCadence != types.InvoiceCadenceAdvance {
+			return ierr.NewError("invoice_cadence must be ADVANCE for ONETIME prices").
+				WithHint("One-time charges are always billed in advance").
 				Mark(ierr.ErrValidation)
 		}
 	}
 
 	// 11. Validate trial period
-	if r.TrialPeriod < 0 {
-		return ierr.NewError("trial period must be non-negative").
-			WithHint("Please provide a non-negative trial period").
+	if r.TrialPeriodDays < 0 {
+		return ierr.NewError("trial_period_days must be non-negative").
+			WithHint("Please provide a non-negative trial_period_days").
 			Mark(ierr.ErrValidation)
 	}
-	if r.TrialPeriod > 0 &&
-		r.BillingCadence != types.BILLING_CADENCE_RECURRING &&
-		r.Type != types.PRICE_TYPE_FIXED {
-		return ierr.NewError("trial period can only be set for recurring fixed prices").
-			WithHint("Trial period can only be set for recurring fixed prices").
+	if r.TrialPeriodDays > 0 &&
+		(r.BillingPeriod == types.BILLING_PERIOD_ONETIME || r.Type != types.PRICE_TYPE_FIXED) {
+		return ierr.NewError("trial_period_days can only be set for recurring fixed prices").
+			WithHint("trial_period_days can only be set for recurring fixed prices").
 			Mark(ierr.ErrValidation)
 	}
 
-	// 12. Validate dates
+	// 12. Validate dates (backdated start_date is allowed; when end_date is provided it must be after start_date)
 	if r.StartDate != nil && r.EndDate != nil {
 		if r.StartDate.After(*r.EndDate) {
 			return ierr.NewError("start date must be before end date").
 				WithHint("Start date must be before end date").
 				Mark(ierr.ErrValidation)
 		}
-	}
-
-	// 13. Validate usage price cannot be added to addon
-	if r.Type == types.PRICE_TYPE_USAGE && r.EntityType == types.PRICE_ENTITY_TYPE_ADDON {
-		return ierr.NewError("Usage based price cannot be added to an addon").
-			WithHint("Usage based price cannot be added to an addon").
-			Mark(ierr.ErrValidation)
 	}
 
 	return nil
@@ -441,10 +437,10 @@ func (r *CreatePriceRequest) ToPrice(ctx context.Context) (*priceDomain.Price, e
 		BillingPeriod:      r.BillingPeriod,
 		BillingPeriodCount: r.BillingPeriodCount,
 		BillingModel:       r.BillingModel,
-		BillingCadence:     r.BillingCadence,
+		BillingCadence:     types.BILLING_CADENCE_RECURRING,
 		InvoiceCadence:     r.InvoiceCadence,
-		TrialPeriod:        r.TrialPeriod,
-		MeterID:            r.MeterID,
+		TrialPeriodDays:    r.TrialPeriodDays,
+		MeterID:            lo.Ternary(r.Type == types.PRICE_TYPE_USAGE, r.MeterID, ""),
 		LookupKey:          r.LookupKey,
 		Description:        r.Description,
 		Metadata:           metadata,
@@ -548,12 +544,6 @@ func (r *UpdatePriceRequest) Validate() error {
 			Mark(ierr.ErrValidation)
 	}
 
-	if r.EffectiveFrom != nil && r.ShouldCreateNewPrice() && r.EffectiveFrom.Before(time.Now().UTC()) {
-		return ierr.NewError("effective from date must be in the future when used as termination date").
-			WithHint("Effective from date must be in the future when updating critical fields").
-			Mark(ierr.ErrValidation)
-	}
-
 	return nil
 }
 
@@ -583,10 +573,9 @@ func (r *UpdatePriceRequest) ToCreatePriceRequest(existingPrice *price.Price) Cr
 	createReq.Type = existingPrice.Type
 	createReq.BillingPeriod = existingPrice.BillingPeriod
 	createReq.BillingPeriodCount = existingPrice.BillingPeriodCount
-	createReq.BillingCadence = existingPrice.BillingCadence
 	createReq.InvoiceCadence = existingPrice.InvoiceCadence
-	createReq.TrialPeriod = existingPrice.TrialPeriod
-	createReq.MeterID = existingPrice.MeterID
+	createReq.TrialPeriodDays = existingPrice.TrialPeriodDays
+	createReq.MeterID = lo.Ternary(existingPrice.Type == types.PRICE_TYPE_USAGE, existingPrice.MeterID, "")
 	createReq.ParentPriceID = existingPrice.GetRootPriceID()
 	createReq.DisplayName = existingPrice.DisplayName
 
@@ -595,7 +584,12 @@ func (r *UpdatePriceRequest) ToCreatePriceRequest(existingPrice *price.Price) Cr
 	}
 
 	// Handle GroupID: use request value if provided, otherwise use existing
-	createReq.GroupID = lo.Ternary(r.GroupID != "", r.GroupID, existingPrice.GroupID)
+	// If GroupID is nil, keep existing group. If it's a pointer to empty string, clear it. Otherwise, use the new value.
+	if r.GroupID == nil {
+		createReq.GroupID = existingPrice.GroupID
+	} else {
+		createReq.GroupID = *r.GroupID
+	}
 
 	// Determine target billing model (use request billing model if provided, otherwise existing)
 	targetBillingModel := existingPrice.BillingModel
@@ -720,12 +714,6 @@ func (r *CreateBulkPriceRequest) Validate() error {
 }
 
 func (r *DeletePriceRequest) Validate() error {
-	if r.EndDate != nil && r.EndDate.Before(time.Now().UTC()) {
-		return ierr.NewError("end date must be in the future").
-			WithHint("End date must be in the future").
-			Mark(ierr.ErrValidation)
-	}
-
 	return nil
 }
 

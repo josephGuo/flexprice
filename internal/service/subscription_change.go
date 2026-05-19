@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
+	"github.com/flexprice/flexprice/internal/domain/customer"
 	"github.com/flexprice/flexprice/internal/domain/plan"
 	"github.com/flexprice/flexprice/internal/domain/proration"
 	"github.com/flexprice/flexprice/internal/domain/subscription"
@@ -23,6 +25,9 @@ type SubscriptionChangeService interface {
 
 	// ExecuteSubscriptionChange performs the actual subscription plan change
 	ExecuteSubscriptionChange(ctx context.Context, subscriptionID string, req dto.SubscriptionChangeRequest) (*dto.SubscriptionChangeExecuteResponse, error)
+
+	// ExecuteSubscriptionChangeInternal executes a subscription change immediately (used by scheduled execution)
+	ExecuteSubscriptionChangeInternal(ctx context.Context, subscriptionID string, req dto.SubscriptionChangeRequest) (*dto.SubscriptionChangeExecuteResponse, error)
 }
 
 type subscriptionChangeService struct {
@@ -90,6 +95,10 @@ func (s *subscriptionChangeService) PreviewSubscriptionChange(
 		return nil, err
 	}
 
+	if err := s.validateProrationForSubscriptionChange(currentSub, req.ProrationBehavior); err != nil {
+		return nil, err
+	}
+
 	// Determine change type and validate it's allowed
 	changeType, err := s.determineChangeType(ctx, currentPlan, targetPlan)
 	if err != nil {
@@ -110,7 +119,7 @@ func (s *subscriptionChangeService) PreviewSubscriptionChange(
 	}
 
 	// Calculate next invoice preview
-	nextInvoice, err := s.calculateNextInvoicePreview(ctx, currentSub, targetPlan, effectiveDate)
+	nextInvoice, err := s.calculateNextInvoicePreview(ctx, currentSub, targetPlan, effectiveDate, prorationDetails, req.ChangeAt)
 	if err != nil {
 		logger.Error("failed to calculate next invoice preview", zap.Error(err))
 		return nil, err
@@ -171,6 +180,29 @@ func (s *subscriptionChangeService) ExecuteSubscriptionChange(
 		return nil, err
 	}
 
+	// BRANCH: Determine execution timing
+	// - If change_at is "period_end": schedule for end of billing period
+	// - If change_at is "immediate" or not provided: execute immediately
+	if req.ChangeAt != nil && *req.ChangeAt == types.ScheduleTypePeriodEnd {
+		return s.scheduleChangeForPeriodEnd(ctx, subscriptionID, req)
+	}
+
+	// IMMEDIATE EXECUTION PATH (when change_at is "immediate")
+	return s.ExecuteSubscriptionChangeInternal(ctx, subscriptionID, req)
+}
+
+// ExecuteSubscriptionChangeInternal executes a subscription change immediately
+// This is the core execution logic used by both immediate API calls and scheduled execution
+func (s *subscriptionChangeService) ExecuteSubscriptionChangeInternal(
+	ctx context.Context,
+	subscriptionID string,
+	req dto.SubscriptionChangeRequest,
+) (*dto.SubscriptionChangeExecuteResponse, error) {
+	logger := s.serviceParams.Logger.With(
+		zap.String("subscription_id", subscriptionID),
+		zap.String("target_plan_id", req.TargetPlanID),
+	)
+
 	var response *dto.SubscriptionChangeExecuteResponse
 
 	// Execute the change within a transaction
@@ -203,6 +235,10 @@ func (s *subscriptionChangeService) ExecuteSubscriptionChange(
 			return err
 		}
 
+		if err := s.validateProrationForSubscriptionChange(currentSub, req.ProrationBehavior); err != nil {
+			return err
+		}
+
 		// Determine change type
 		changeType, err := s.determineChangeType(txCtx, currentPlan, targetPlan)
 		if err != nil {
@@ -211,7 +247,6 @@ func (s *subscriptionChangeService) ExecuteSubscriptionChange(
 
 		// Calculate effective date
 		effectiveDate := time.Now()
-		// effectiveDate := time.Date(2025, 9, 15, 12, 0, 0, 0, time.UTC)
 
 		// Execute the change based on type
 		result, err := s.executeChange(txCtx, currentSub, lineItems, targetPlan, changeType, req, effectiveDate)
@@ -234,6 +269,156 @@ func (s *subscriptionChangeService) ExecuteSubscriptionChange(
 	)
 
 	return response, nil
+}
+
+// scheduleChangeForPeriodEnd schedules a plan change to execute at period end
+// This creates a database entry in subscription_schedules table
+// The actual execution happens during period processing (cron or temporal workflow)
+func (s *subscriptionChangeService) scheduleChangeForPeriodEnd(
+	ctx context.Context,
+	subscriptionID string,
+	req dto.SubscriptionChangeRequest,
+) (*dto.SubscriptionChangeExecuteResponse, error) {
+	logger := s.serviceParams.Logger.With(
+		zap.String("subscription_id", subscriptionID),
+		zap.String("target_plan_id", req.TargetPlanID),
+		zap.String("change_at", string(*req.ChangeAt)),
+	)
+
+	logger.Info("scheduling subscription change for period end")
+
+	// Get subscription to calculate period end
+	sub, err := s.serviceParams.SubRepo.Get(ctx, subscriptionID)
+	if err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to retrieve subscription").
+			Mark(ierr.ErrDatabase)
+	}
+
+	// Validate subscription is active
+	if sub.SubscriptionStatus != types.SubscriptionStatusActive {
+		return nil, ierr.NewError("subscription must be active to schedule changes").
+			WithHint("Only active subscriptions can have scheduled plan changes").
+			Mark(ierr.ErrValidation)
+	}
+
+	// Check if subscription is scheduled for cancellation at period end
+	// If so, user must cancel the cancellation schedule first
+	cancelSchedule, err := s.serviceParams.SubScheduleRepo.GetPendingBySubscriptionAndType(
+		ctx,
+		subscriptionID,
+		types.SubscriptionScheduleChangeTypeCancellation,
+	)
+	if err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to check for existing cancellation schedule").
+			Mark(ierr.ErrDatabase)
+	}
+	if cancelSchedule != nil {
+		return nil, ierr.NewError("subscription is scheduled for cancellation at period end").
+			WithHint("Cancel the pending cancellation schedule before scheduling a plan change").
+			WithReportableDetails(map[string]any{
+				"cancellation_schedule_id": cancelSchedule.ID,
+				"scheduled_at":             cancelSchedule.ScheduledAt,
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	// Check for existing pending plan change schedule
+	existing, err := s.serviceParams.SubScheduleRepo.GetPendingBySubscriptionAndType(
+		ctx,
+		subscriptionID,
+		types.SubscriptionScheduleChangeTypePlanChange,
+	)
+	if err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to check for existing schedules").
+			Mark(ierr.ErrDatabase)
+	}
+	if existing != nil {
+		return nil, ierr.NewError("a plan change is already scheduled for this subscription").
+			WithHint("Cancel the existing scheduled plan change before creating a new one").
+			WithReportableDetails(map[string]any{
+				"existing_schedule_id": existing.ID,
+				"scheduled_at":         existing.ScheduledAt,
+			}).
+			Mark(ierr.ErrValidation)
+	}
+
+	// Create configuration from request
+	config := &subscription.PlanChangeConfiguration{
+		TargetPlanID:       req.TargetPlanID,
+		ProrationBehavior:  req.ProrationBehavior,
+		BillingCadence:     req.BillingCadence,
+		BillingPeriod:      req.BillingPeriod,
+		BillingPeriodCount: req.BillingPeriodCount,
+		BillingCycle:       req.BillingCycle,
+		ChangeMetadata:     req.Metadata,
+	}
+
+	// Create the schedule entry
+	schedule := &subscription.SubscriptionSchedule{
+		ID:             types.GenerateUUIDWithPrefix(types.UUID_PREFIX_SUBSCRIPTION_SCHEDULE),
+		SubscriptionID: subscriptionID,
+		ScheduleType:   types.SubscriptionScheduleChangeTypePlanChange,
+		ScheduledAt:    sub.CurrentPeriodEnd,
+		Status:         types.ScheduleStatusPending,
+		TenantID:       sub.TenantID,
+		EnvironmentID:  sub.EnvironmentID,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
+		CreatedBy:      types.GetUserID(ctx),
+		UpdatedBy:      types.GetUserID(ctx),
+		StatusColumn:   types.StatusPublished,
+	}
+
+	// Set configuration
+	if err := schedule.SetPlanChangeConfig(config); err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to serialize plan change configuration").
+			Mark(ierr.ErrInternal)
+	}
+
+	// Save to database
+	if err := s.serviceParams.SubScheduleRepo.Create(ctx, schedule); err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to create schedule entry").
+			Mark(ierr.ErrDatabase)
+	}
+
+	logger.Info("subscription change scheduled successfully",
+		zap.String("schedule_id", schedule.ID),
+		zap.Time("scheduled_at", schedule.ScheduledAt),
+	)
+
+	// Return response indicating the change was scheduled
+	response := &dto.SubscriptionChangeExecuteResponse{
+		IsScheduled:   true,
+		ScheduleID:    &schedule.ID,
+		ScheduledAt:   &schedule.ScheduledAt,
+		ChangeType:    types.SubscriptionChangeTypeUpgrade, // Will be determined at execution time
+		EffectiveDate: schedule.ScheduledAt,                // Scheduled execution time
+	}
+
+	return response, nil
+}
+
+// validateProrationForSubscriptionChange aligns plan-change proration with CancelSubscription rules
+// so preview and execute both fail when cancellation proration is unsupported.
+func (s *subscriptionChangeService) validateProrationForSubscriptionChange(
+	sub *subscription.Subscription,
+	behavior types.ProrationBehavior,
+) error {
+	if behavior == types.ProrationBehaviorCreateProrations && sub.HasMixedBillingPeriods() {
+		return ierr.NewError("proration is not supported for subscriptions with mixed billing periods").
+			WithHint("Set proration_behavior to 'none' when changing a subscription with different billing periods").
+			WithReportableDetails(map[string]any{
+				"subscription_id":    sub.ID,
+				"proration_behavior": behavior,
+			}).
+			Mark(ierr.ErrValidation)
+	}
+	return nil
 }
 
 // validateSubscriptionForChange checks if subscription can be changed
@@ -344,6 +529,8 @@ func (s *subscriptionChangeService) calculateNextInvoicePreview(
 	currentSub *subscription.Subscription,
 	targetPlan *plan.Plan,
 	effectiveDate time.Time,
+	prorationDetails *dto.ProrationDetails,
+	changeAt *types.ScheduleType,
 ) (*dto.InvoicePreview, error) {
 	// Get target plan prices
 	priceService := NewPriceService(s.serviceParams)
@@ -377,13 +564,54 @@ func (s *subscriptionChangeService) calculateNextInvoicePreview(
 		}
 	}
 
-	return &dto.InvoicePreview{
+	preview := &dto.InvoicePreview{
 		Subtotal:  subtotal,
 		TaxAmount: decimal.Zero,
 		Total:     subtotal,
 		Currency:  currentSub.Currency,
 		LineItems: lineItems,
-	}, nil
+	}
+
+	applySubscriptionChangePreviewCredit(preview, prorationDetails, changeAt)
+
+	return preview, nil
+}
+
+// applySubscriptionChangePreviewCredit applies immediate proration credit to the next-invoice preview.
+// It reduces line item amounts in slice order (capped per line) and keeps Subtotal/Total consistent.
+func applySubscriptionChangePreviewCredit(preview *dto.InvoicePreview, prorationDetails *dto.ProrationDetails, changeAt *types.ScheduleType) {
+	if preview == nil || prorationDetails == nil {
+		return
+	}
+
+	creditAmount := prorationDetails.CreditAmount
+	// When ChangeAt is omitted, subscription change semantics default to "immediate".
+	isImmediate := changeAt == nil || lo.FromPtr(changeAt) == types.ScheduleTypeImmediate
+	if !(isImmediate && creditAmount.GreaterThan(decimal.Zero) && len(preview.LineItems) > 0) {
+		return
+	}
+
+	// Apply credit across line items in order.
+	preview.LineItems = slices.Clone(preview.LineItems)
+	remaining := creditAmount
+	for i := range preview.LineItems {
+		if remaining.IsZero() {
+			break
+		}
+		take := decimal.Min(remaining, preview.LineItems[i].Amount)
+		preview.LineItems[i].Amount = preview.LineItems[i].Amount.Sub(take)
+		// Keep unit price aligned for quantity==1 previews.
+		preview.LineItems[i].UnitPrice = preview.LineItems[i].Amount
+		remaining = remaining.Sub(take)
+	}
+
+	// Subtotal equals sum of adjusted line items; clamp to zero for safety.
+	subtotal := lo.Reduce(preview.LineItems, func(acc decimal.Decimal, li dto.InvoiceLineItemPreview, _ int) decimal.Decimal {
+		return acc.Add(li.Amount)
+	}, decimal.Zero)
+
+	preview.Subtotal = decimal.Max(decimal.Zero, subtotal)
+	preview.Total = subtotal.Add(preview.TaxAmount)
 }
 
 // calculateNewBillingCycle calculates the new billing cycle information
@@ -473,23 +701,39 @@ func (s *subscriptionChangeService) executeChange(
 	req dto.SubscriptionChangeRequest,
 	effectiveDate time.Time,
 ) (*dto.SubscriptionChangeExecuteResponse, error) {
-	// Cancel the old subscription
+
+	// Cancel the old subscription (pass through proration_behavior so execute matches preview).
 	subscriptionService := NewSubscriptionService(s.serviceParams)
 	archivedSub, err := subscriptionService.CancelSubscription(ctx, currentSub.ID, &dto.CancelSubscriptionRequest{
-		CancellationType: types.CancellationTypeImmediate,
-		Reason:           "subscription_change",
+		CancellationType:          types.CancellationTypeImmediate,
+		Reason:                    "subscription_change",
+		ProrationBehavior:         req.ProrationBehavior,
+		SkipProrationWalletCredit: true, // we always skip the wallet credit refund since we will apply it as adjustment to the new subscription 1st invoice
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	// For immediate plan changes with create_prorations, we net the old subscription's proration
+	// credit against the new subscription's opening invoice (instead of issuing wallet credit).
+	cancelledSubCreditAmount := decimal.Zero
+	if req.ProrationBehavior == types.ProrationBehaviorCreateProrations {
+		prorationDetails, err := s.calculateProrationPreview(ctx, currentSub, lineItems, targetPlan, effectiveDate)
+		if err != nil {
+			return nil, err
+		}
+		if prorationDetails != nil {
+			cancelledSubCreditAmount = prorationDetails.CreditAmount
+		}
+	}
+
 	// Create new subscription
-	newSub, err := s.createNewSubscription(ctx, currentSub, lineItems, targetPlan, req, effectiveDate)
+	newSub, err := s.createNewSubscription(ctx, currentSub, lineItems, targetPlan, req, effectiveDate, cancelledSubCreditAmount)
 	if err != nil {
 		return nil, err
 	}
 
-	return &dto.SubscriptionChangeExecuteResponse{
+	out := &dto.SubscriptionChangeExecuteResponse{
 		OldSubscription: dto.SubscriptionSummary{
 			ID:     archivedSub.SubscriptionID,
 			Status: archivedSub.Status,
@@ -506,7 +750,17 @@ func (s *subscriptionChangeService) executeChange(
 		ChangeType:    changeType,
 		EffectiveDate: effectiveDate,
 		Metadata:      req.Metadata,
-	}, nil
+	}
+
+	if req.ProrationBehavior == types.ProrationBehaviorCreateProrations {
+		prorationApplied, calcErr := s.calculateProrationPreview(ctx, currentSub, lineItems, targetPlan, effectiveDate)
+		if calcErr != nil {
+			return nil, calcErr
+		}
+		out.ProrationApplied = prorationApplied
+	}
+
+	return out, nil
 }
 
 // createNewSubscription creates a new subscription with the target plan using the existing subscription service
@@ -517,7 +771,76 @@ func (s *subscriptionChangeService) createNewSubscription(
 	targetPlan *plan.Plan,
 	req dto.SubscriptionChangeRequest,
 	effectiveDate time.Time,
+	cancelledSubTotalCreditAmount decimal.Decimal,
 ) (*subscription.Subscription, error) {
+	// Carry over inherited child subscriptions and invoicing customer via Inheritance config.
+	// ExternalCustomerIDsToInheritSubscription and InvoicingCustomerExternalID are mutually exclusive,
+	// so children take priority (a parent sub with children typically has no separate invoicing customer).
+	var inheritance *dto.SubscriptionInheritanceConfig
+
+	if currentSub.SubscriptionType == types.SubscriptionTypeParent {
+		inheritedFilter := types.NewNoLimitSubscriptionFilter()
+		inheritedFilter.ParentSubscriptionIDs = []string{currentSub.ID}
+		inheritedFilter.SubscriptionTypes = []types.SubscriptionType{types.SubscriptionTypeInherited}
+		inheritedFilter.SubscriptionStatus = []types.SubscriptionStatus{
+			types.SubscriptionStatusActive,
+			types.SubscriptionStatusTrialing,
+		}
+		childSubs, err := s.serviceParams.SubRepo.List(ctx, inheritedFilter)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(childSubs) > 0 {
+			customerIDs := lo.Uniq(lo.Map(childSubs, func(ch *subscription.Subscription, _ int) string {
+				return ch.CustomerID
+			}))
+			custFilter := types.NewNoLimitCustomerFilter()
+			custFilter.CustomerIDs = customerIDs
+			customers, err := s.serviceParams.CustomerRepo.List(ctx, custFilter)
+			if err != nil {
+				return nil, err
+			}
+			byID := lo.KeyBy(customers, func(c *customer.Customer) string { return c.ID })
+			childExternalIDs := make([]string, 0, len(childSubs))
+			for _, ch := range childSubs {
+				c, ok := byID[ch.CustomerID]
+				if !ok {
+					return nil, ierr.NewErrorf("customer not found for child subscription (customer_id=%s)", ch.CustomerID).
+						WithHint("Customer not found").
+						WithReportableDetails(map[string]any{
+							"customer_id":           ch.CustomerID,
+							"child_subscription_id": ch.ID,
+						}).
+						Mark(ierr.ErrNotFound)
+				}
+				childExternalIDs = append(childExternalIDs, c.ExternalID)
+			}
+			inheritance = &dto.SubscriptionInheritanceConfig{
+				ExternalCustomerIDsToInheritSubscription: childExternalIDs,
+			}
+		}
+	}
+
+	if currentSub.InvoicingCustomerID != nil {
+		invoicingCustomer, err := s.serviceParams.CustomerRepo.Get(ctx, *currentSub.InvoicingCustomerID)
+		if err != nil {
+			return nil, err
+		}
+		inheritance = &dto.SubscriptionInheritanceConfig{
+			InvoicingCustomerExternalID: &invoicingCustomer.ExternalID,
+		}
+	}
+
+	// For anniversary billing, anchor the new subscription to the effective (upgrade) date,
+	// not the old sub's anchor. Inheriting the old anchor would create a short first billing
+	// period (old-anchor-day vs effective-day), causing prorated advance charges instead of
+	// a full-period invoice.
+	var newBillingAnchor *time.Time
+	if req.BillingCycle == types.BillingCycleAnniversary {
+		newBillingAnchor = &effectiveDate
+	}
+
 	// Create new subscription request
 	createSubReq := dto.CreateSubscriptionRequest{
 		CustomerID:         currentSub.CustomerID,
@@ -528,14 +851,23 @@ func (s *subscriptionChangeService) createNewSubscription(
 		BillingPeriod:      req.BillingPeriod,
 		BillingPeriodCount: req.BillingPeriodCount,
 		BillingCycle:       req.BillingCycle,
-		BillingAnchor:      &currentSub.BillingAnchor,
+		BillingAnchor:      newBillingAnchor,
 		StartDate:          &effectiveDate,
 		Metadata:           req.Metadata,
 		ProrationBehavior:  req.ProrationBehavior,
 		CustomerTimezone:   currentSub.CustomerTimezone,
 		CommitmentAmount:   currentSub.CommitmentAmount,
 		OverageFactor:      currentSub.OverageFactor,
+		PaymentTerms:       currentSub.PaymentTerms,
 		Workflow:           lo.ToPtr(types.TemporalSubscriptionCreationWorkflow),
+		Inheritance:        inheritance,
+	}
+
+	// When doing an immediate plan change, we cancel the old subscription with proration but
+	// skip wallet credit issuance. Instead, we net that credit against the new subscription's
+	// opening invoice as an adjustment.
+	if req.ProrationBehavior == types.ProrationBehaviorCreateProrations && !cancelledSubTotalCreditAmount.IsZero() {
+		createSubReq.OpeningInvoiceAdjustmentAmount = &cancelledSubTotalCreditAmount
 	}
 
 	subscriptionService := NewSubscriptionService(s.serviceParams)

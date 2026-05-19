@@ -1,6 +1,7 @@
 package events
 
 import (
+	"strings"
 	"time"
 
 	ierr "github.com/flexprice/flexprice/internal/errors"
@@ -93,6 +94,71 @@ type ReprocessEventsParams struct {
 	StartTime          time.Time // Filter by start time (optional)
 	EndTime            time.Time // Filter by end time (optional)
 	BatchSize          int       // Number of events to process per batch (default 100)
+	ForceReprocess     bool      // If true, fetches events directly from events table (bypasses processed check)
+	RunStartTime       time.Time // Immutable checkpoint for this run (UTC)
+}
+
+// ReprocessEventsResult contains the result of event reprocessing
+type ReprocessEventsResult struct {
+	TotalEventsFound     int // Total number of events found matching the criteria
+	TotalEventsPublished int // Total number of events successfully published for reprocessing
+	ProcessedBatches     int // Number of batches processed
+}
+
+// RawEvent represents a raw event from the raw_events table
+type RawEvent struct {
+	ID                 string    `json:"id" ch:"id"`
+	TenantID           string    `json:"tenant_id" ch:"tenant_id"`
+	EnvironmentID      string    `json:"environment_id" ch:"environment_id"`
+	ExternalCustomerID string    `json:"external_customer_id" ch:"external_customer_id"`
+	EventName          string    `json:"event_name" ch:"event_name"`
+	Source             *string   `json:"source" ch:"source"`
+	Payload            string    `json:"payload" ch:"payload"`
+	Field1             *string   `json:"field1" ch:"field1"`
+	Field2             *string   `json:"field2" ch:"field2"`
+	Field3             *string   `json:"field3" ch:"field3"`
+	Field4             *string   `json:"field4" ch:"field4"`
+	Field5             *string   `json:"field5" ch:"field5"`
+	Field6             *string   `json:"field6" ch:"field6"`
+	Field7             *string   `json:"field7" ch:"field7"`
+	Field8             *string   `json:"field8" ch:"field8"`
+	Field9             *string   `json:"field9" ch:"field9"`
+	Field10            *string   `json:"field10" ch:"field10"`
+	Timestamp          time.Time `json:"timestamp" ch:"timestamp,timezone('UTC')"`
+	IngestedAt         time.Time `json:"ingested_at" ch:"ingested_at,timezone('UTC')"`
+	Version            uint64    `json:"version" ch:"version"`
+	Sign               int8      `json:"sign" ch:"sign"`
+}
+
+// KeysetCursor holds the pagination position for keyset-based pagination.
+// The caller passes this back on the next request to continue from where
+// the previous batch left off.
+type KeysetCursor struct {
+	LastTimestamp time.Time // Timestamp of the last row in the previous batch
+	LastID        string    // ID of the last row in the previous batch
+}
+
+// FindRawEventsParams contains parameters for finding raw events
+type FindRawEventsParams struct {
+	ExternalCustomerIDs []string      // Optional filter by external customer IDs
+	EventNames          []string      // Optional filter by event names
+	StartTime           time.Time     // Optional filter by start time
+	EndTime             time.Time     // Optional filter by end time
+	BatchSize           int           // Number of events to return per batch
+	Offset              int           // Offset for pagination (OFFSET/LIMIT approach)
+	EventIDs            []string      // Optional filter by specific event IDs
+	KeysetCursor        *KeysetCursor // Optional cursor for keyset pagination (used by FindUnprocessedRawEvents)
+}
+
+// ReprocessRawEventsParams contains parameters for raw event reprocessing
+type ReprocessRawEventsParams struct {
+	ExternalCustomerIDs []string  // Filter by external customer IDs (optional)
+	EventNames          []string  // Filter by event names (optional)
+	StartTime           time.Time // Filter by start time (optional)
+	EndTime             time.Time // Filter by end time (optional)
+	BatchSize           int       // Number of events to process per batch (default 1000)
+	EventIDs            []string  // Filter by specific event IDs (optional)
+	UseUnprocessed      bool      // When true, use FindUnprocessedRawEvents instead of FindRawEvents
 }
 
 // NewEvent creates a new event with defaults
@@ -121,7 +187,7 @@ func NewEvent(
 		CustomerID:         customerID,
 		ExternalCustomerID: externalCustomerID,
 		Source:             source,
-		EventName:          eventName,
+		EventName:          strings.TrimSpace(eventName),
 		Timestamp:          timestamp,
 		Properties:         properties,
 		EnvironmentID:      environmentID,

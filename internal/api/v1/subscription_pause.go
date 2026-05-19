@@ -24,19 +24,6 @@ func NewSubscriptionPauseHandler(service service.SubscriptionService, log *logge
 	}
 }
 
-// @Summary Pause a subscription
-// @Description Pause a subscription with the specified parameters
-// @Tags Subscriptions
-// @Accept json
-// @Produce json
-// @Security ApiKeyAuth
-// @Param id path string true "Subscription ID"
-// @Param request body dto.PauseSubscriptionRequest true "Pause subscription request"
-// @Success 200 {object} dto.SubscriptionPauseResponse
-// @Failure 400 {object} ierr.ErrorResponse
-// @Failure 404 {object} ierr.ErrorResponse
-// @Failure 500 {object} ierr.ErrorResponse
-// @Router /subscriptions/{id}/pause [post]
 func (h *SubscriptionPauseHandler) PauseSubscription(c *gin.Context) {
 	subscriptionID := c.Param("id")
 	if subscriptionID == "" {
@@ -88,19 +75,6 @@ func (h *SubscriptionPauseHandler) PauseSubscription(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// @Summary Resume a paused subscription
-// @Description Resume a paused subscription with the specified parameters
-// @Tags Subscriptions
-// @Accept json
-// @Produce json
-// @Security ApiKeyAuth
-// @Param id path string true "Subscription ID"
-// @Param request body dto.ResumeSubscriptionRequest true "Resume subscription request"
-// @Success 200 {object} dto.SubscriptionPauseResponse
-// @Failure 400 {object} ierr.ErrorResponse
-// @Failure 404 {object} ierr.ErrorResponse
-// @Failure 500 {object} ierr.ErrorResponse
-// @Router /subscriptions/{id}/resume [post]
 func (h *SubscriptionPauseHandler) ResumeSubscription(c *gin.Context) {
 	subscriptionID := c.Param("id")
 	if subscriptionID == "" {
@@ -151,16 +125,6 @@ func (h *SubscriptionPauseHandler) ResumeSubscription(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// @Summary List all pauses for a subscription
-// @Description List all pauses for a subscription
-// @Tags Subscriptions
-// @Produce json
-// @Param id path string true "Subscription ID"
-// @Success 200 {array} dto.ListSubscriptionPausesResponse
-// @Failure 400 {object} ierr.ErrorResponse
-// @Failure 404 {object} ierr.ErrorResponse
-// @Failure 500 {object} ierr.ErrorResponse
-// @Router /subscriptions/{id}/pauses [get]
 func (h *SubscriptionPauseHandler) ListPauses(c *gin.Context) {
 	subscriptionID := c.Param("id")
 	if subscriptionID == "" {

@@ -34,6 +34,8 @@ const (
 	FieldCustomerID = "customer_id"
 	// FieldSubscriptionID holds the string denoting the subscription_id field in the database.
 	FieldSubscriptionID = "subscription_id"
+	// FieldSubscriptionCustomerID holds the string denoting the subscription_customer_id field in the database.
+	FieldSubscriptionCustomerID = "subscription_customer_id"
 	// FieldInvoiceType holds the string denoting the invoice_type field in the database.
 	FieldInvoiceType = "invoice_type"
 	// FieldInvoiceStatus holds the string denoting the invoice_status field in the database.
@@ -70,6 +72,10 @@ const (
 	FieldVoidedAt = "voided_at"
 	// FieldFinalizedAt holds the string denoting the finalized_at field in the database.
 	FieldFinalizedAt = "finalized_at"
+	// FieldIssueDate holds the string denoting the issue_date field in the database.
+	FieldIssueDate = "issue_date"
+	// FieldLastComputedAt holds the string denoting the last_computed_at field in the database.
+	FieldLastComputedAt = "last_computed_at"
 	// FieldBillingPeriod holds the string denoting the billing_period field in the database.
 	FieldBillingPeriod = "billing_period"
 	// FieldPeriodStart holds the string denoting the period_start field in the database.
@@ -88,8 +94,12 @@ const (
 	FieldInvoiceNumber = "invoice_number"
 	// FieldBillingSequence holds the string denoting the billing_sequence field in the database.
 	FieldBillingSequence = "billing_sequence"
+	// FieldTotalPrepaidCreditsApplied holds the string denoting the total_prepaid_credits_applied field in the database.
+	FieldTotalPrepaidCreditsApplied = "total_prepaid_credits_applied"
 	// FieldIdempotencyKey holds the string denoting the idempotency_key field in the database.
 	FieldIdempotencyKey = "idempotency_key"
+	// FieldRecalculatedInvoiceID holds the string denoting the recalculated_invoice_id field in the database.
+	FieldRecalculatedInvoiceID = "recalculated_invoice_id"
 	// EdgeLineItems holds the string denoting the line_items edge name in mutations.
 	EdgeLineItems = "line_items"
 	// EdgeCouponApplications holds the string denoting the coupon_applications edge name in mutations.
@@ -124,6 +134,7 @@ var Columns = []string{
 	FieldEnvironmentID,
 	FieldCustomerID,
 	FieldSubscriptionID,
+	FieldSubscriptionCustomerID,
 	FieldInvoiceType,
 	FieldInvoiceStatus,
 	FieldPaymentStatus,
@@ -142,6 +153,8 @@ var Columns = []string{
 	FieldPaidAt,
 	FieldVoidedAt,
 	FieldFinalizedAt,
+	FieldIssueDate,
+	FieldLastComputedAt,
 	FieldBillingPeriod,
 	FieldPeriodStart,
 	FieldPeriodEnd,
@@ -151,7 +164,9 @@ var Columns = []string{
 	FieldVersion,
 	FieldInvoiceNumber,
 	FieldBillingSequence,
+	FieldTotalPrepaidCreditsApplied,
 	FieldIdempotencyKey,
+	FieldRecalculatedInvoiceID,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -207,6 +222,8 @@ var (
 	DefaultTotal decimal.Decimal
 	// DefaultVersion holds the default value on creation for the "version" field.
 	DefaultVersion int
+	// DefaultTotalPrepaidCreditsApplied holds the default value on creation for the "total_prepaid_credits_applied" field.
+	DefaultTotalPrepaidCreditsApplied decimal.Decimal
 )
 
 // OrderOption defines the ordering options for the Invoice queries.
@@ -260,6 +277,11 @@ func ByCustomerID(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionID orders the results by the subscription_id field.
 func BySubscriptionID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionID, opts...).ToFunc()
+}
+
+// BySubscriptionCustomerID orders the results by the subscription_customer_id field.
+func BySubscriptionCustomerID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSubscriptionCustomerID, opts...).ToFunc()
 }
 
 // ByInvoiceType orders the results by the invoice_type field.
@@ -352,6 +374,16 @@ func ByFinalizedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldFinalizedAt, opts...).ToFunc()
 }
 
+// ByIssueDate orders the results by the issue_date field.
+func ByIssueDate(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIssueDate, opts...).ToFunc()
+}
+
+// ByLastComputedAt orders the results by the last_computed_at field.
+func ByLastComputedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLastComputedAt, opts...).ToFunc()
+}
+
 // ByBillingPeriod orders the results by the billing_period field.
 func ByBillingPeriod(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBillingPeriod, opts...).ToFunc()
@@ -392,9 +424,19 @@ func ByBillingSequence(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBillingSequence, opts...).ToFunc()
 }
 
+// ByTotalPrepaidCreditsApplied orders the results by the total_prepaid_credits_applied field.
+func ByTotalPrepaidCreditsApplied(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTotalPrepaidCreditsApplied, opts...).ToFunc()
+}
+
 // ByIdempotencyKey orders the results by the idempotency_key field.
 func ByIdempotencyKey(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldIdempotencyKey, opts...).ToFunc()
+}
+
+// ByRecalculatedInvoiceID orders the results by the recalculated_invoice_id field.
+func ByRecalculatedInvoiceID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRecalculatedInvoiceID, opts...).ToFunc()
 }
 
 // ByLineItemsCount orders the results by line_items count.

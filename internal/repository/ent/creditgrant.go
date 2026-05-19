@@ -547,15 +547,12 @@ func (o CreditGrantQueryOptions) ApplyPaginationFilter(query CreditGrantQuery, l
 	return query
 }
 
+// GetFieldName returns the ent field name for credit_grant; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o CreditGrantQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return creditgrant.FieldCreatedAt
-	case "updated_at":
-		return creditgrant.FieldUpdatedAt
-	default:
+	if creditgrant.ValidColumn(field) {
 		return field
 	}
+	return ""
 }
 
 func (o CreditGrantQueryOptions) applyEntityQueryOptions(_ context.Context, f *types.CreditGrantFilter, query CreditGrantQuery) CreditGrantQuery {
@@ -586,6 +583,11 @@ func (o CreditGrantQueryOptions) applyEntityQueryOptions(_ context.Context, f *t
 		if f.EndTime != nil {
 			query = query.Where(creditgrant.CreatedAtLTE(*f.EndTime))
 		}
+	}
+
+	// Apply credit grant IDs filter if specified
+	if len(f.CreditGrantIDs) > 0 {
+		query = query.Where(creditgrant.IDIn(f.CreditGrantIDs...))
 	}
 
 	return query

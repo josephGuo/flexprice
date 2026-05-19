@@ -103,6 +103,7 @@
   applied-discounts: (),        // Applied discounts breakdown
   subtotal: 0,                  // Subtotal before discounts and tax
   discount: 0,                  // Total discounts
+  total-prepaid-credits-applied: 0,  // Total prepaid credits applied
   tax: 0,                       // Total tax
   billing-period: "",           // Billing period (e.g., "monthly", "yearly")
   description: "",             // Invoice description
@@ -112,6 +113,11 @@
   invoice-type: "",             // Invoice type (subscription, one_time, etc.)
   doc,
 ) = {
+  // Go nil slices marshal as JSON null; .at(..., default: ()) only applies when the key is missing.
+  let items = if items == none { () } else { items }
+  let applied-taxes = if applied-taxes == none { () } else { applied-taxes }
+  let applied-discounts = if applied-discounts == none { () } else { applied-discounts }
+
   // Set styling defaults
   styling.font = styling.at("font", default: "Inter")
   styling.font-size = styling.at("font-size", default: 9pt)
@@ -226,20 +232,38 @@
   )
 
   v(1.5em)
-  // Main line items table with integrated usage breakdowns
+  let last-group = ""
+  
+  // Display items
   for (i, item) in items.enumerate() {
-    // Amount is already the total line amount, not unit price
+    let group-name = item.at("group", default: "")
+    let normalized-group = if group-name == "" or group-name == "--" { "" } else { group-name }
+    
+    // Show group header when group changes from empty to a group, or when group name changes
+    if normalized-group != "" and normalized-group != last-group {
+      if i > 0 {
+        v(0.5em)
+      }
+      table(
+        columns: (3fr, 1.5fr, 0.8fr, 1.2fr),
+        inset: (top: 8pt, bottom: 8pt, left: 8pt, right: 8pt),
+        align: left,
+        fill: rgb("#e9ecef"),
+        stroke: (x, y) => (
+          bottom: 1pt + rgb("#d0d5db"),
+        ),
+        [#text(weight: "semibold", size: 10pt, fill: rgb("#2c3e50"))[#normalized-group]],
+        [],
+        [],
+        []
+      )
+    }
+    
     let line-total = item.amount
     let amount-display = if line-total < 0 {
       [−#currency #format-currency(calc.abs(line-total), precision: precision)]
     } else {
       [#currency #format-currency(line-total, precision: precision)]
-    }
-    
-    let description = if item.at("description", default: "Recurring") != "" {
-      item.at("description", default: "Recurring")
-    } else {
-      "-"
     }
     
     let has_period = item.at("period_start", default: "") != "" and item.at("period_end", default: "") != ""
@@ -249,7 +273,6 @@
       "-"
     }
     
-    // Display the main line item
     if i == 0 {
       // Add header only for the first item
       table(
@@ -272,7 +295,6 @@
         [#amount-display]
       )
     } else {
-      // Just the row for subsequent items
       table(
         columns: (3fr, 1.5fr, 0.8fr, 1.2fr),
         inset: (top: 10pt, bottom: 10pt, left: 8pt, right: 8pt),
@@ -292,36 +314,28 @@
     let has_usage_breakdown = "usage_breakdown" in item and item.usage_breakdown != none and item.usage_breakdown.len() > 0
     
     if has_usage_breakdown {
-      // Show usage breakdown as sub-rows within the same table structure
       for usage_item in item.usage_breakdown {
-        // Check if grouped_by exists
         if "grouped_by" in usage_item {
-          // Extract data from the usage breakdown item
           let grouped_by = usage_item.at("grouped_by", default: none)
           let cost = usage_item.at("cost", default: none)
           let usage = usage_item.at("usage", default: none)
           
-          // Only proceed if grouped_by is not none
           if grouped_by != none {
-            // Extract resource name from grouped_by map - try multiple fields
             let resource_name = grouped_by.at("resource_name", default: 
               grouped_by.at("type", default: 
                 grouped_by.at("feature_id", default: 
                   grouped_by.at("source", default: "—"))))
             
-            // Parse cost string to float safely
             let cost_value = 0.0
             if cost != none {
               cost_value = float(str(cost))
             }
             
-            // Parse usage/units safely
             let usage_value = 0.0
             if usage != none {
               usage_value = float(str(usage))
             }
             
-            // Display usage breakdown as a sub-row with indentation
             table(
               columns: (3fr, 1.5fr, 0.8fr, 1.2fr),
               inset: (top: 6pt, bottom: 6pt, left: 2em, right: 8pt),
@@ -329,7 +343,7 @@
               fill: rgb("#f8f9fa"),
               stroke: none,
               [#text(size: 0.85em, fill: rgb("#666666"), weight: "regular")[└─ #resource_name]],
-              [],  // Empty interval column
+              [],
               [#text(size: 0.9em, weight: "medium")[#format-number(usage_value)]],
             [#text(size: 0.9em, weight: "medium")[#currency #format-currency(cost_value, precision: precision)]]
             )
@@ -338,8 +352,9 @@
       }
     }
     
-    // Only add spacing if there's usage breakdown or if it's not the last item
-    if has_usage_breakdown or i < items.len() - 1 {
+    // Update last group and add spacing
+    last-group = normalized-group
+    if i < items.len() - 1 {
       v(0.5em)
     }
   }
@@ -361,11 +376,14 @@
       // Show discount row only if there's a discount
       ..if discount > 0 { ([Discount], [−#currency#format-currency(discount, precision: precision)]) } else { () },
       
+      // Show prepaid credits applied row only if there's prepaid credits applied
+      ..if total-prepaid-credits-applied > 0 { ([Prepaid Credits Applied], [−#currency#format-currency(total-prepaid-credits-applied, precision: precision)]) } else { () },
+      
       // Show tax row only if there's tax
       ..if tax > 0 { ([Tax], [#currency#format-currency(tax, precision: precision)]) } else { () },
       
       table.hline(stroke: 0.5pt + black),
-      [*Net Payable*], [*#currency#format-currency(subtotal - discount + tax, precision: precision)*],
+      [*Net Payable*], [*#currency#format-currency(amount-remaining, precision: precision)*],
       
       // Show payment information if payment status is not pending or if amount paid > 0
       ..if payment-status != "" and payment-status != "pending" and amount-paid > 0 {

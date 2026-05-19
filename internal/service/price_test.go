@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
+	"github.com/flexprice/flexprice/internal/domain/events"
 	"github.com/flexprice/flexprice/internal/domain/meter"
 	"github.com/flexprice/flexprice/internal/domain/plan"
 	"github.com/flexprice/flexprice/internal/domain/price"
@@ -28,6 +29,7 @@ type PriceServiceSuite struct {
 	meterRepo     *testutil.InMemoryMeterStore
 	planRepo      *testutil.InMemoryPlanStore
 	priceUnitRepo *testutil.InMemoryPriceUnitStore
+	addonRepo     *testutil.InMemoryAddonStore
 	logger        *logger.Logger
 }
 
@@ -41,13 +43,14 @@ func (s *PriceServiceSuite) SetupTest() {
 	s.meterRepo = testutil.NewInMemoryMeterStore()
 	s.planRepo = testutil.NewInMemoryPlanStore()
 	s.priceUnitRepo = testutil.NewInMemoryPriceUnitStore()
+	s.addonRepo = testutil.NewInMemoryAddonStore()
 	s.logger = logger.GetLogger()
 
 	serviceParams := ServiceParams{
 		PriceRepo:     s.priceRepo,
 		MeterRepo:     s.meterRepo,
 		PlanRepo:      s.planRepo,
-		AddonRepo:     testutil.NewInMemoryAddonStore(),
+		AddonRepo:     s.addonRepo,
 		SubRepo:       testutil.NewInMemorySubscriptionStore(),
 		PriceUnitRepo: s.priceUnitRepo,
 		Logger:        s.logger,
@@ -66,6 +69,18 @@ func (s *PriceServiceSuite) TestCreatePrice() {
 	}
 	_ = s.planRepo.Create(s.ctx, plan)
 
+	// Create a meter so that the USAGE price can reference it (meter validation requires it to exist)
+	testMeter := &meter.Meter{
+		ID:        "meter-1",
+		Name:      "Test Meter",
+		EventName: "api_call",
+		Aggregation: meter.Aggregation{
+			Type: types.AggregationCount,
+		},
+		BaseModel: types.GetDefaultBaseModel(s.ctx),
+	}
+	_ = s.meterRepo.CreateMeter(s.ctx, testMeter)
+
 	amount := decimal.RequireFromString("100")
 	req := dto.CreatePriceRequest{
 		Amount:             &amount,
@@ -78,8 +93,7 @@ func (s *PriceServiceSuite) TestCreatePrice() {
 		BillingPeriodCount: 1,
 		BillingModel:       types.BILLING_MODEL_TIERED,
 		TierMode:           types.BILLING_TIER_SLAB,
-		InvoiceCadence:     types.InvoiceCadenceAdvance,
-		BillingCadence:     types.BILLING_CADENCE_RECURRING,
+		InvoiceCadence:     types.InvoiceCadenceArrear,
 		Description:        "Test Price",
 		Metadata:           map[string]string{"key": "value"},
 		Tiers: []dto.CreatePriceTier{
@@ -199,6 +213,129 @@ func (s *PriceServiceSuite) TestUpdatePrice() {
 	s.NotNil(resp)
 	s.Equal(req.Description, resp.Price.Description)
 	s.Equal(req.Metadata, map[string]string(resp.Price.Metadata)) // Convert Metadata for comparison
+}
+
+func (s *PriceServiceSuite) TestUpdatePrice_EffectiveDateValidation() {
+	s.Run("EffectiveFrom_before_price_start_date_returns_error", func() {
+		priceStart := time.Now().UTC().AddDate(0, 0, -2)           // 2 days ago
+		effectiveBeforeStart := time.Now().UTC().AddDate(0, 0, -3) // 3 days ago
+		p := &price.Price{
+			ID:         "price-eff-before-start",
+			Amount:     decimal.NewFromInt(100),
+			Currency:   "usd",
+			EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:   "plan-1",
+			StartDate:  &priceStart,
+		}
+		_ = s.priceRepo.Create(s.ctx, p)
+
+		newAmount := decimal.NewFromInt(200)
+		req := dto.UpdatePriceRequest{
+			Amount:        &newAmount,
+			EffectiveFrom: &effectiveBeforeStart,
+		}
+
+		_, err := s.priceService.UpdatePrice(s.ctx, p.ID, req)
+		s.Error(err)
+		s.Contains(err.Error(), "effective date must be on or after price start date")
+
+		updated, _ := s.priceRepo.Get(s.ctx, p.ID)
+		s.NotNil(updated)
+		s.Nil(updated.EndDate)
+		s.True(updated.Amount.Equal(decimal.NewFromInt(100)))
+	})
+
+	s.Run("EffectiveFrom_on_or_after_start_date_backdated_succeeds", func() {
+		priceStart := time.Now().UTC().AddDate(0, 0, -5)    // 5 days ago
+		effectiveFrom := time.Now().UTC().AddDate(0, 0, -3) // 3 days ago (>= priceStart)
+		p := &price.Price{
+			ID:                 "price-eff-backdated-ok",
+			Amount:             decimal.NewFromInt(100),
+			Currency:           "usd",
+			EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:           "plan-1",
+			StartDate:          &priceStart,
+			Type:               types.PRICE_TYPE_FIXED,
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+			InvoiceCadence:     types.InvoiceCadenceAdvance,
+		}
+		_ = s.priceRepo.Create(s.ctx, p)
+		oldID := p.ID
+
+		newAmount := decimal.NewFromInt(250)
+		req := dto.UpdatePriceRequest{
+			Amount:        &newAmount,
+			EffectiveFrom: &effectiveFrom,
+		}
+
+		resp, err := s.priceService.UpdatePrice(s.ctx, p.ID, req)
+		s.NoError(err)
+		s.NotNil(resp)
+		s.NotEqual(oldID, resp.Price.ID)
+		s.True(resp.Price.Amount.Equal(decimal.NewFromInt(250)))
+		s.NotNil(resp.Price.StartDate)
+		s.Equal(effectiveFrom.Unix(), resp.Price.StartDate.Unix())
+
+		oldPrice, _ := s.priceRepo.Get(s.ctx, oldID)
+		s.NotNil(oldPrice.EndDate)
+		s.Equal(effectiveFrom.Unix(), oldPrice.EndDate.Unix())
+	})
+
+	s.Run("EffectiveFrom_without_critical_field_returns_error", func() {
+		p := &price.Price{
+			ID:         "price-eff-no-critical",
+			Amount:     decimal.NewFromInt(100),
+			Currency:   "usd",
+			EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:   "plan-1",
+		}
+		_ = s.priceRepo.Create(s.ctx, p)
+
+		effectiveFrom := time.Now().UTC().AddDate(0, 0, 1)
+		req := dto.UpdatePriceRequest{
+			EffectiveFrom: &effectiveFrom,
+		}
+
+		_, err := s.priceService.UpdatePrice(s.ctx, p.ID, req)
+		s.Error(err)
+		s.Contains(err.Error(), "effective_from requires at least one critical field")
+	})
+
+	s.Run("critical_field_without_EffectiveFrom_terminates_at_now", func() {
+		p := &price.Price{
+			ID:                 "price-critical-no-eff",
+			Amount:             decimal.NewFromInt(100),
+			Currency:           "usd",
+			EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:           "plan-1",
+			Type:               types.PRICE_TYPE_FIXED,
+			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+			BillingPeriodCount: 1,
+			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+			InvoiceCadence:     types.InvoiceCadenceAdvance,
+		}
+		_ = s.priceRepo.Create(s.ctx, p)
+		oldID := p.ID
+
+		newAmount := decimal.NewFromInt(300)
+		req := dto.UpdatePriceRequest{
+			Amount: &newAmount,
+		}
+
+		before := time.Now().UTC()
+		resp, err := s.priceService.UpdatePrice(s.ctx, p.ID, req)
+		after := time.Now().UTC()
+		s.NoError(err)
+		s.NotNil(resp)
+		s.NotEqual(oldID, resp.Price.ID)
+		s.True(resp.Price.Amount.Equal(decimal.NewFromInt(300)))
+
+		oldPrice, _ := s.priceRepo.Get(s.ctx, oldID)
+		s.NotNil(oldPrice.EndDate)
+		s.True(oldPrice.EndDate.Unix() >= before.Unix() && oldPrice.EndDate.Unix() <= after.Unix()+1)
+	})
 }
 
 func (s *PriceServiceSuite) TestDeletePrice() {
@@ -752,6 +889,67 @@ func (s *PriceServiceSuite) TestCalculateBucketedCost_ComplexScenario() {
 		expected.String(), result.String(), bucketedValues)
 }
 
+func (s *PriceServiceSuite) TestCalculateCostFromUsageResults_TieredSlab() {
+	// Slab tiered pricing: 0-10 units ₹1/unit, 10-∞ ₹2/unit. Per-group (e.g. per KRN) slab applied individually.
+	upTo10 := uint64(10)
+	price := &price.Price{
+		ID:           "price-group-tiered-slab",
+		Amount:       decimal.Zero,
+		Currency:     "inr",
+		BillingModel: types.BILLING_MODEL_TIERED,
+		TierMode:     types.BILLING_TIER_SLAB,
+		Tiers: []price.PriceTier{
+			{UpTo: &upTo10, UnitAmount: decimal.NewFromInt(1)},
+			{UpTo: nil, UnitAmount: decimal.NewFromInt(2)},
+		},
+	}
+
+	// One bucket (e.g. 1st hour): krn1 max=3, krn2 max=12
+	// krn1: 3 × ₹1 = ₹3; krn2: 10×₹1 + 2×₹2 = ₹14; total = ₹17
+	bucketStart := time.Now().Truncate(time.Hour)
+	results := []events.UsageResult{
+		{WindowSize: bucketStart, Value: decimal.NewFromInt(3), GroupKey: "krn1"},
+		{WindowSize: bucketStart, Value: decimal.NewFromInt(12), GroupKey: "krn2"},
+	}
+
+	result := s.priceService.CalculateCostFromUsageResults(s.ctx, price, results)
+	expected := decimal.NewFromInt(17)
+	s.True(expected.Equal(result),
+		"Expected cost %s but got %s for per-group slab (krn1=3, krn2=12)",
+		expected.String(), result.String())
+}
+
+func (s *PriceServiceSuite) TestCalculateCostFromUsageResults_TieredVolume() {
+	// Volume tiered: 0-10 $0.10/unit, 11-20 $0.05/unit. Per-group volume tier applied individually.
+	upTo10 := uint64(10)
+	upTo20 := uint64(20)
+	price := &price.Price{
+		ID:           "price-group-tiered-volume",
+		Amount:       decimal.Zero,
+		Currency:     "usd",
+		BillingModel: types.BILLING_MODEL_TIERED,
+		TierMode:     types.BILLING_TIER_VOLUME,
+		Tiers: []price.PriceTier{
+			{UpTo: &upTo10, UnitAmount: decimal.NewFromFloat(0.10)},
+			{UpTo: &upTo20, UnitAmount: decimal.NewFromFloat(0.05)},
+			{UpTo: nil, UnitAmount: decimal.NewFromFloat(0.02)},
+		},
+	}
+
+	// One bucket: group A max=5 (tier 1 → 5*0.10=$0.50), group B max=15 (tier 2 → 15*0.05=$0.75); total=$1.25
+	bucketStart := time.Now().Truncate(time.Hour)
+	results := []events.UsageResult{
+		{WindowSize: bucketStart, Value: decimal.NewFromInt(5), GroupKey: "A"},
+		{WindowSize: bucketStart, Value: decimal.NewFromInt(15), GroupKey: "B"},
+	}
+
+	result := s.priceService.CalculateCostFromUsageResults(s.ctx, price, results)
+	expected := decimal.NewFromFloat(1.25)
+	s.True(expected.Equal(result),
+		"Expected cost %s but got %s for per-group volume (A=5, B=15)",
+		expected.String(), result.String())
+}
+
 func (s *PriceServiceSuite) TestCalculateCostWithBreakup_TieredSlabCorrected() {
 	// Test the corrected slab tier calculation logic
 	// Pricing: 0-5 = $0/unit, 5-10 = $2/unit, 10+ = $3/unit
@@ -1042,8 +1240,8 @@ func (s *PriceServiceSuite) TestDeletePrice_Comprehensive() {
 		s.True(timeDiff < time.Second, "End date should be set to current time")
 	})
 
-	s.Run("TC-DEL-005_Past_End_Date_Provided", func() {
-		// Create a price first
+	s.Run("TC-DEL-005_Backdated_End_Date_Allowed", func() {
+		// Create a price first (no explicit start date, so default applies)
 		price := &price.Price{
 			ID:         "price-past-end-date",
 			Amount:     decimal.NewFromInt(100),
@@ -1053,15 +1251,18 @@ func (s *PriceServiceSuite) TestDeletePrice_Comprehensive() {
 		}
 		_ = s.priceRepo.Create(s.ctx, price)
 
-		// Try to delete with past end date
+		// Delete with backdated end date is allowed
 		pastDate := time.Now().UTC().AddDate(0, 0, -1) // 1 day ago
 		req := dto.DeletePriceRequest{
 			EndDate: lo.ToPtr(pastDate),
 		}
 
 		err := s.priceService.DeletePrice(s.ctx, price.ID, req)
-		s.Error(err)
-		s.Contains(err.Error(), "end date must be in the future")
+		s.NoError(err)
+		updatedPrice, err := s.priceRepo.Get(s.ctx, price.ID)
+		s.NoError(err)
+		s.NotNil(updatedPrice.EndDate)
+		s.Equal(pastDate.Unix(), updatedPrice.EndDate.Unix())
 	})
 
 	s.Run("TC-DEL-006_Future_End_Date_Provided", func() {
@@ -1506,8 +1707,7 @@ func (s *PriceServiceSuite) TestUpdatePrice_CustomPriceUnitValidation() {
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
-			InvoiceCadence:     types.InvoiceCadenceAdvance,
+			InvoiceCadence:     types.InvoiceCadenceArrear,
 		}
 		_ = s.priceRepo.Create(s.ctx, customPrice)
 
@@ -1565,8 +1765,7 @@ func (s *PriceServiceSuite) TestUpdatePrice_CustomPriceUnitValidation() {
 			TierMode:           types.BILLING_TIER_SLAB,
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
-			InvoiceCadence:     types.InvoiceCadenceAdvance,
+			InvoiceCadence:     types.InvoiceCadenceArrear,
 			PriceUnitTiers: []price.PriceTier{
 				{
 					UpTo:       &upTo10,
@@ -1605,7 +1804,6 @@ func (s *PriceServiceSuite) TestUpdatePrice_CustomPriceUnitValidation() {
 			BillingModel:       types.BILLING_MODEL_FLAT_FEE,
 			BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
 			BillingPeriodCount: 1,
-			BillingCadence:     types.BILLING_CADENCE_RECURRING,
 			InvoiceCadence:     types.InvoiceCadenceAdvance,
 		}
 		_ = s.priceRepo.Create(s.ctx, fiatPrice)
@@ -1666,6 +1864,46 @@ func (s *PriceServiceSuite) TestGetByLookupKey() {
 	s.Run("non_existent_lookup_key", func() {
 		// Try to retrieve with non-existent lookup key
 		resp, err := s.priceService.GetByLookupKey(s.ctx, "non_existent_key")
+		s.Error(err)
+		s.Nil(resp)
+		s.Contains(err.Error(), "not found")
+	})
+
+	s.Run("only_returns_active_prices_without_end_date", func() {
+		// Create an inactive price with an end date in the past (terminated price)
+		inactivePricePast := &price.Price{
+			ID:         "price-lookup-inactive-past",
+			Amount:     decimal.NewFromInt(200),
+			Currency:   "usd",
+			EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:   "plan-1",
+			LookupKey:  "inactive_lookup_key_past",
+			BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			EndDate:    lo.ToPtr(time.Now().UTC().AddDate(0, 0, -1)), // End date in the past (inactive)
+		}
+		_ = s.priceRepo.Create(s.ctx, inactivePricePast)
+
+		// Try to retrieve inactive price by lookup key - should fail
+		resp, err := s.priceService.GetByLookupKey(s.ctx, "inactive_lookup_key_past")
+		s.Error(err)
+		s.Nil(resp)
+		s.Contains(err.Error(), "not found")
+
+		// Create an inactive price with an end date in the future (scheduled termination)
+		inactivePriceFuture := &price.Price{
+			ID:         "price-lookup-inactive-future",
+			Amount:     decimal.NewFromInt(300),
+			Currency:   "usd",
+			EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+			EntityID:   "plan-1",
+			LookupKey:  "inactive_lookup_key_future",
+			BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			EndDate:    lo.ToPtr(time.Now().UTC().AddDate(0, 0, 1)), // End date in the future (inactive)
+		}
+		_ = s.priceRepo.Create(s.ctx, inactivePriceFuture)
+
+		// Try to retrieve inactive price with future end date by lookup key - should fail
+		resp, err = s.priceService.GetByLookupKey(s.ctx, "inactive_lookup_key_future")
 		s.Error(err)
 		s.Nil(resp)
 		s.Contains(err.Error(), "not found")
@@ -1896,3 +2134,447 @@ func (s *PriceServiceSuite) TestGetByLookupKey() {
 	})
 }
 
+func (s *PriceServiceSuite) TestCreateBulkPrice_EntityPriceLimitValidation() {
+	// Create a plan first so that prices can reference it
+	testPlan := &plan.Plan{
+		ID:          "plan-bulk-test",
+		Name:        "Test Plan for Bulk",
+		Description: "A test plan for bulk price creation",
+		BaseModel:   types.GetDefaultBaseModel(s.ctx),
+	}
+	_ = s.planRepo.Create(s.ctx, testPlan)
+
+	amount := decimal.RequireFromString("100")
+
+	s.Run("successful_bulk_creation_within_limit", func() {
+		// Create bulk prices that are well within the limit
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.NoError(err)
+		s.NotNil(resp)
+		s.Len(resp.Items, 2)
+	})
+
+	s.Run("bulk_creation_exceeds_limit_for_entity", func() {
+		// Clear previous prices for this test to ensure clean state
+		s.priceRepo.Clear()
+
+		// Create (MAX_ACTIVE_PRICES-1) existing published prices for the plan (1 less than max)
+		for i := 0; i < price.MAX_ACTIVE_PRICES-1; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Try to create 2 more prices (would exceed the limit)
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.Error(err)
+		s.Nil(resp)
+		s.Contains(err.Error(), "entity has too many active prices")
+	})
+
+	s.Run("bulk_creation_at_exact_limit", func() {
+		// Clear previous prices for this test
+		s.priceRepo = testutil.NewInMemoryPriceStore()
+		s.addonRepo.Clear()
+		serviceParams := ServiceParams{
+			PriceRepo:     s.priceRepo,
+			MeterRepo:     s.meterRepo,
+			PlanRepo:      s.planRepo,
+			AddonRepo:     s.addonRepo,
+			SubRepo:       testutil.NewInMemorySubscriptionStore(),
+			PriceUnitRepo: s.priceUnitRepo,
+			Logger:        s.logger,
+			DB:            testutil.NewMockPostgresClient(s.logger),
+		}
+		s.priceService = NewPriceService(serviceParams)
+
+		// Create (MAX_ACTIVE_PRICES-1) existing published prices (1 less than max)
+		for i := 0; i < price.MAX_ACTIVE_PRICES-1; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Create 1 more price (exactly at the limit)
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.NoError(err)
+		s.NotNil(resp)
+		s.Len(resp.Items, 1)
+	})
+
+	s.Run("bulk_creation_multiple_prices_same_entity", func() {
+		// Clear previous prices for this test
+		s.priceRepo = testutil.NewInMemoryPriceStore()
+		s.addonRepo.Clear()
+		serviceParams := ServiceParams{
+			PriceRepo:     s.priceRepo,
+			MeterRepo:     s.meterRepo,
+			PlanRepo:      s.planRepo,
+			AddonRepo:     s.addonRepo,
+			SubRepo:       testutil.NewInMemorySubscriptionStore(),
+			PriceUnitRepo: s.priceUnitRepo,
+			Logger:        s.logger,
+			DB:            testutil.NewMockPostgresClient(s.logger),
+		}
+		s.priceService = NewPriceService(serviceParams)
+
+		// Create (MAX_ACTIVE_PRICES-2) existing published prices so that adding 3 exceeds limit (1498+3=1501)
+		for i := 0; i < price.MAX_ACTIVE_PRICES-2; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Try to create 3 prices in bulk (exceeding limit)
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.Error(err)
+		s.Nil(resp)
+		s.Contains(err.Error(), "entity has too many active prices")
+	})
+
+	s.Run("bulk_creation_multiple_entities_one_exceeds_limit", func() {
+		// Create a second plan
+		plan2 := &plan.Plan{
+			ID:          "plan-bulk-test-2",
+			Name:        "Test Plan 2 for Bulk",
+			Description: "A second test plan",
+			BaseModel:   types.GetDefaultBaseModel(s.ctx),
+		}
+		_ = s.planRepo.Create(s.ctx, plan2)
+
+		// Clear previous prices for this test
+		s.priceRepo = testutil.NewInMemoryPriceStore()
+		s.addonRepo.Clear()
+		serviceParams := ServiceParams{
+			PriceRepo:     s.priceRepo,
+			MeterRepo:     s.meterRepo,
+			PlanRepo:      s.planRepo,
+			AddonRepo:     s.addonRepo,
+			SubRepo:       testutil.NewInMemorySubscriptionStore(),
+			PriceUnitRepo: s.priceUnitRepo,
+			Logger:        s.logger,
+			DB:            testutil.NewMockPostgresClient(s.logger),
+		}
+		s.priceService = NewPriceService(serviceParams)
+
+		// Create MAX_ACTIVE_PRICES existing published prices for plan-bulk-test (at the limit)
+		for i := 0; i < price.MAX_ACTIVE_PRICES; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Try to create prices for both plans - one should fail because plan-bulk-test is at limit
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+				{
+					Amount:             &amount,
+					Currency:           "usd",
+					EntityType:         types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:           "plan-bulk-test-2",
+					Type:               types.PRICE_TYPE_FIXED,
+					PriceUnitType:      types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:      types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount: 1,
+					BillingModel:       types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:     types.InvoiceCadenceAdvance,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.Error(err)
+		s.Nil(resp)
+		s.Contains(err.Error(), "entity has too many active prices")
+		// The error should contain details about the entity that exceeded the limit
+		// Check error details if available, or just verify the error type
+	})
+
+	s.Run("bulk_creation_with_skip_entity_validation", func() {
+		// Clear previous prices for this test
+		s.priceRepo = testutil.NewInMemoryPriceStore()
+		s.addonRepo.Clear()
+		serviceParams := ServiceParams{
+			PriceRepo:     s.priceRepo,
+			MeterRepo:     s.meterRepo,
+			PlanRepo:      s.planRepo,
+			AddonRepo:     s.addonRepo,
+			SubRepo:       testutil.NewInMemorySubscriptionStore(),
+			PriceUnitRepo: s.priceUnitRepo,
+			Logger:        s.logger,
+			DB:            testutil.NewMockPostgresClient(s.logger),
+		}
+		s.priceService = NewPriceService(serviceParams)
+
+		// Create (MAX_ACTIVE_PRICES-1) existing published prices
+		for i := 0; i < price.MAX_ACTIVE_PRICES-1; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Create 2 more prices with SkipEntityValidation = true (should bypass limit check)
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:               &amount,
+					Currency:             "usd",
+					EntityType:           types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:             "plan-bulk-test",
+					Type:                 types.PRICE_TYPE_FIXED,
+					PriceUnitType:        types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount:   1,
+					BillingModel:         types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:       types.InvoiceCadenceAdvance,
+					SkipEntityValidation: true,
+				},
+				{
+					Amount:               &amount,
+					Currency:             "usd",
+					EntityType:           types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:             "plan-bulk-test",
+					Type:                 types.PRICE_TYPE_FIXED,
+					PriceUnitType:        types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount:   1,
+					BillingModel:         types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:       types.InvoiceCadenceAdvance,
+					SkipEntityValidation: true,
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.NoError(err)
+		s.NotNil(resp)
+		s.Len(resp.Items, 2)
+	})
+
+	s.Run("bulk_creation_mixed_skip_validation", func() {
+		// Clear previous prices for this test
+		s.priceRepo = testutil.NewInMemoryPriceStore()
+		s.addonRepo.Clear()
+		serviceParams := ServiceParams{
+			PriceRepo:     s.priceRepo,
+			MeterRepo:     s.meterRepo,
+			PlanRepo:      s.planRepo,
+			AddonRepo:     s.addonRepo,
+			SubRepo:       testutil.NewInMemorySubscriptionStore(),
+			PriceUnitRepo: s.priceUnitRepo,
+			Logger:        s.logger,
+			DB:            testutil.NewMockPostgresClient(s.logger),
+		}
+		s.priceService = NewPriceService(serviceParams)
+
+		// Create 999 existing prices
+		for i := 0; i < 999; i++ {
+			existingPrice := &price.Price{
+				ID:         types.GenerateUUIDWithPrefix(types.UUID_PREFIX_PRICE),
+				Amount:     decimal.NewFromInt(100),
+				Currency:   "usd",
+				EntityType: types.PRICE_ENTITY_TYPE_PLAN,
+				EntityID:   "plan-bulk-test",
+				BaseModel:  types.GetDefaultBaseModel(s.ctx),
+			}
+			_ = s.priceRepo.Create(s.ctx, existingPrice)
+		}
+
+		// Create prices with mixed SkipEntityValidation flags
+		// First item skips validation, so all items for this entity should skip validation
+		// Even though second item has SkipEntityValidation=false, validation is skipped because first item has it true
+		req := dto.CreateBulkPriceRequest{
+			Items: []dto.CreatePriceRequest{
+				{
+					Amount:               &amount,
+					Currency:             "usd",
+					EntityType:           types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:             "plan-bulk-test",
+					Type:                 types.PRICE_TYPE_FIXED,
+					PriceUnitType:        types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount:   1,
+					BillingModel:         types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:       types.InvoiceCadenceAdvance,
+					SkipEntityValidation: true, // First item skips validation
+				},
+				{
+					Amount:               &amount,
+					Currency:             "usd",
+					EntityType:           types.PRICE_ENTITY_TYPE_PLAN,
+					EntityID:             "plan-bulk-test",
+					Type:                 types.PRICE_TYPE_FIXED,
+					PriceUnitType:        types.PRICE_UNIT_TYPE_FIAT,
+					BillingPeriod:        types.BILLING_PERIOD_MONTHLY,
+					BillingPeriodCount:   1,
+					BillingModel:         types.BILLING_MODEL_FLAT_FEE,
+					InvoiceCadence:       types.InvoiceCadenceAdvance,
+					SkipEntityValidation: false, // This doesn't matter - first item already skipped validation
+				},
+			},
+		}
+
+		resp, err := s.priceService.CreateBulkPrice(s.ctx, req)
+		s.NoError(err)
+		s.NotNil(resp)
+		s.Len(resp.Items, 2)
+	})
+}

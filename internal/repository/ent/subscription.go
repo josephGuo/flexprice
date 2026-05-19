@@ -19,6 +19,8 @@ import (
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/postgres"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/samber/lo"
+	"github.com/shopspring/decimal"
 )
 
 type subscriptionRepository struct {
@@ -59,6 +61,7 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domainSub.Subs
 		SetLookupKey(sub.LookupKey).
 		SetCustomerID(sub.CustomerID).
 		SetPlanID(sub.PlanID).
+		SetSubscriptionType(sub.SubscriptionType).
 		SetSubscriptionStatus(sub.SubscriptionStatus).
 		SetCurrency(sub.Currency).
 		SetBillingAnchor(sub.BillingAnchor).
@@ -77,6 +80,8 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domainSub.Subs
 		SetBillingCycle(sub.BillingCycle).
 		SetNillableCommitmentAmount(sub.CommitmentAmount).
 		SetNillableOverageFactor(sub.OverageFactor).
+		SetNillableAutoInvoiceThreshold(sub.AutoInvoiceThreshold).
+		SetNillableCommitmentDuration(sub.CommitmentDuration).
 		SetStatus(string(sub.Status)).
 		SetCreatedBy(sub.CreatedBy).
 		SetUpdatedBy(sub.UpdatedBy).
@@ -89,6 +94,8 @@ func (r *subscriptionRepository) Create(ctx context.Context, sub *domainSub.Subs
 		SetNillableGatewayPaymentMethodID(sub.GatewayPaymentMethodID).
 		SetEnableTrueUp(sub.EnableTrueUp).
 		SetNillableInvoicingCustomerID(sub.InvoicingCustomerID).
+		SetNillableParentSubscriptionID(sub.ParentSubscriptionID).
+		SetNillablePaymentTerms(sub.PaymentTerms).
 		Save(ctx)
 
 	if err != nil {
@@ -170,10 +177,9 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domainSub.Subs
 		SetStartDate(sub.StartDate).
 		SetBillingAnchor(sub.BillingAnchor).
 		SetSubscriptionStatus(sub.SubscriptionStatus).
+		SetSubscriptionType(sub.SubscriptionType).
 		SetCurrentPeriodStart(sub.CurrentPeriodStart).
 		SetCurrentPeriodEnd(sub.CurrentPeriodEnd).
-		SetNillableCancelledAt(sub.CancelledAt).
-		SetNillableCancelAt(sub.CancelAt).
 		SetPauseStatus(sub.PauseStatus).
 		SetCancelAtPeriodEnd(sub.CancelAtPeriodEnd).
 		SetPaymentBehavior(types.PaymentBehavior(sub.PaymentBehavior)).
@@ -182,13 +188,44 @@ func (r *subscriptionRepository) Update(ctx context.Context, sub *domainSub.Subs
 		SetNillableInvoicingCustomerID(sub.InvoicingCustomerID).
 		SetUpdatedAt(now).
 		SetUpdatedBy(types.GetUserID(ctx)).
-		SetNillableEndDate(sub.EndDate).
 		SetMetadata(sub.Metadata)
+
+	// Handle nullable payment_terms - explicitly clear if nil
+	if sub.PaymentTerms != nil {
+		query.SetPaymentTerms(*sub.PaymentTerms)
+	} else {
+		query.ClearPaymentTerms()
+	}
+
+	// Handle nullable date fields - explicitly clear if nil
+	if sub.CancelledAt != nil {
+		query.SetCancelledAt(*sub.CancelledAt)
+	} else {
+		query.ClearCancelledAt()
+	}
+
+	if sub.CancelAt != nil {
+		query.SetCancelAt(*sub.CancelAt)
+	} else {
+		query.ClearCancelAt()
+	}
+
+	if sub.EndDate != nil {
+		query.SetEndDate(*sub.EndDate)
+	} else {
+		query.ClearEndDate()
+	}
 
 	if sub.ActivePauseID != nil {
 		query.SetActivePauseID(*sub.ActivePauseID)
 	} else {
 		query.ClearActivePauseID()
+	}
+
+	if sub.ParentSubscriptionID != nil {
+		query.SetParentSubscriptionID(*sub.ParentSubscriptionID)
+	} else {
+		query.ClearParentSubscriptionID()
 	}
 
 	// Execute update
@@ -356,13 +393,13 @@ func (r *subscriptionRepository) ListAll(ctx context.Context, filter *types.Subs
 	return r.List(ctx, filter)
 }
 
-// ListAllTenant retrieves all subscriptions across all tenants
-// NOTE: This is a potentially expensive operation and to be used only for CRONs
-func (r *subscriptionRepository) ListAllTenant(ctx context.Context, filter *types.SubscriptionFilter) ([]*domainSub.Subscription, error) {
-	r.logger.Debugw("listing subscriptions for all tenants", "filter", filter)
+// GetSubscriptionsForBillingPeriodUpdate lists subscriptions across all tenants for billing-period
+// maintenance (cron/Temporal). NOTE: expensive; intended for scheduled jobs only.
+func (r *subscriptionRepository) GetSubscriptionsForBillingPeriodUpdate(ctx context.Context, filter *types.SubscriptionFilter) ([]*domainSub.Subscription, error) {
+	r.logger.Debugw("listing subscriptions for billing period update", "filter", filter)
 
 	// Start a span for this repository operation
-	span := StartRepositorySpan(ctx, "subscription", "list_all_tenant", map[string]interface{}{
+	span := StartRepositorySpan(ctx, "subscription", "get_subscriptions_for_billing_period_update", map[string]interface{}{
 		"filter": filter,
 	})
 	defer FinishSpan(span)
@@ -490,65 +527,12 @@ func (o SubscriptionQueryOptions) ApplyPaginationFilter(query SubscriptionQuery,
 	return query
 }
 
+// GetFieldName returns the ent field name for subscription; delegates to ent's ValidColumn so new schema fields are supported automatically.
 func (o SubscriptionQueryOptions) GetFieldName(field string) string {
-	switch field {
-	case "created_at":
-		return subscription.FieldCreatedAt
-	case "updated_at":
-		return subscription.FieldUpdatedAt
-	case "start_date":
-		return subscription.FieldStartDate
-	case "end_date":
-		return subscription.FieldEndDate
-	case "current_period_start":
-		return subscription.FieldCurrentPeriodStart
-	case "current_period_end":
-		return subscription.FieldCurrentPeriodEnd
-	case "status":
-		return subscription.FieldStatus
-	case "subscription_status":
-		return subscription.FieldSubscriptionStatus
-	case "billing_cadence":
-		return subscription.FieldBillingCadence
-	case "billing_period":
-		return subscription.FieldBillingPeriod
-	case "billing_period_count":
-		return subscription.FieldBillingPeriodCount
-	case "version":
-		return subscription.FieldVersion
-	case "metadata":
-		return subscription.FieldMetadata
-	case "pause_status":
-		return subscription.FieldPauseStatus
-	case "active_pause_id":
-		return subscription.FieldActivePauseID
-	case "billing_cycle":
-		return subscription.FieldBillingCycle
-	case "commitment_amount":
-		return subscription.FieldCommitmentAmount
-	case "overage_factor":
-		return subscription.FieldOverageFactor
-	case "payment_behavior":
-		return subscription.FieldPaymentBehavior
-	case "collection_method":
-		return subscription.FieldCollectionMethod
-	case "gateway_payment_method_id":
-		return subscription.FieldGatewayPaymentMethodID
-	case "customer_timezone":
-		return subscription.FieldCustomerTimezone
-	case "proration_behavior":
-		return subscription.FieldProrationBehavior
-	case "lookup_key":
-		return subscription.FieldLookupKey
-	case "customer_id":
-		return subscription.FieldCustomerID
-	case "plan_id":
-		return subscription.FieldPlanID
-	case "invoicing_customer_id":
-		return subscription.FieldInvoicingCustomerID
-	default:
+	if subscription.ValidColumn(field) {
 		return field
 	}
+	return ""
 }
 
 func (o SubscriptionQueryOptions) GetFieldResolver(field string) (string, error) {
@@ -558,6 +542,20 @@ func (o SubscriptionQueryOptions) GetFieldResolver(field string) (string, error)
 			Mark(ierr.ErrValidation)
 	}
 	return fieldName, nil
+}
+
+// filtersConstrainSubscriptionStatus reports whether any DSL filter targets subscription_status,
+// so we should not also apply the default "active only" predicate (which would contradict e.g. draft).
+func (o SubscriptionQueryOptions) filtersConstrainSubscriptionStatus(filters []*types.FilterCondition) bool {
+	for _, fc := range filters {
+		if fc == nil || fc.Field == nil {
+			continue
+		}
+		if o.GetFieldName(*fc.Field) == subscription.FieldSubscriptionStatus {
+			return true
+		}
+	}
+	return false
 }
 
 // applyEntityQueryOptions applies subscription-specific filters to the query
@@ -572,9 +570,24 @@ func (o *SubscriptionQueryOptions) applyEntityQueryOptions(_ context.Context, f 
 		query = query.Where(subscription.IDIn(f.SubscriptionIDs...))
 	}
 
+	// Apply parent subscription IDs filter
+	if len(f.ParentSubscriptionIDs) > 0 {
+		query = query.Where(subscription.ParentSubscriptionIDIn(f.ParentSubscriptionIDs...))
+	}
+
+	// Apply subscription type filter
+	if len(f.SubscriptionTypes) > 0 {
+		query = query.Where(subscription.SubscriptionTypeIn(f.SubscriptionTypes...))
+	}
+
 	// Apply customer filter
 	if f.CustomerID != "" {
 		query = query.Where(subscription.CustomerID(f.CustomerID))
+	}
+
+	// Apply customer IDs filter
+	if len(f.CustomerIDs) > 0 {
+		query = query.Where(subscription.CustomerIDIn(f.CustomerIDs...))
 	}
 
 	// Apply invoicing customer filter
@@ -592,8 +605,8 @@ func (o *SubscriptionQueryOptions) applyEntityQueryOptions(_ context.Context, f 
 		query = query.Where(subscription.SubscriptionStatusIn(f.SubscriptionStatus...))
 	}
 
-	// Default to active subscription if not specified
-	if f.SubscriptionStatus == nil {
+	// Default to active when the client did not constrain subscription_status (neither top-level nor DSL filters).
+	if f.SubscriptionStatus == nil && !o.filtersConstrainSubscriptionStatus(f.Filters) {
 		query = query.Where(subscription.SubscriptionStatusEQ(types.SubscriptionStatusActive))
 	}
 
@@ -633,6 +646,29 @@ func (o *SubscriptionQueryOptions) applyEntityQueryOptions(_ context.Context, f 
 		if f.TimeRangeFilter.EndTime != nil {
 			query = query.Where(subscription.CurrentPeriodEndLTE(*f.TimeRangeFilter.EndTime))
 		}
+	}
+
+	// Period / cancellation cutoff for billing updates (preferred for crons)
+	if f.EffectiveDateForUpdate != nil {
+		d := *f.EffectiveDateForUpdate
+		query = query.Where(
+			subscription.Or(
+				subscription.CurrentPeriodEndLTE(d),
+				subscription.And(
+					subscription.CancelAtNotNil(),
+					subscription.CancelAtLTE(d),
+				),
+			),
+		)
+	}
+
+	if f.TrialEndDueLTE != nil {
+		query = query.Where(
+			subscription.And(
+				subscription.TrialEndNotNil(),
+				subscription.TrialEndLTE(lo.FromPtr(f.TrialEndDueLTE)),
+			),
+		)
 	}
 
 	if f.Filters != nil {
@@ -720,13 +756,13 @@ func (r *subscriptionRepository) CreateWithLineItems(ctx context.Context, sub *d
 				SetNillableEndDate(types.ToNillableTime(item.EndDate)).
 				SetNillableSubscriptionPhaseID(item.SubscriptionPhaseID).
 				SetInvoiceCadence(item.InvoiceCadence).
-				SetTrialPeriod(item.TrialPeriod).
 				SetNillableCommitmentAmount(item.CommitmentAmount).
 				SetNillableCommitmentQuantity(item.CommitmentQuantity).
 				SetNillableCommitmentType(types.ToNillableString(string(item.CommitmentType))).
 				SetNillableCommitmentOverageFactor(item.CommitmentOverageFactor).
 				SetCommitmentTrueUpEnabled(item.CommitmentTrueUpEnabled).
 				SetCommitmentWindowed(item.CommitmentWindowed).
+				SetNillableCommitmentDuration(item.CommitmentDuration).
 				SetMetadata(item.Metadata).
 				SetTenantID(item.TenantID).
 				SetEnvironmentID(item.EnvironmentID).
@@ -737,8 +773,15 @@ func (r *subscriptionRepository) CreateWithLineItems(ctx context.Context, sub *d
 				SetUpdatedAt(time.Now())
 		}
 
-		if err := client.SubscriptionLineItem.CreateBulk(bulk...).Exec(ctx); err != nil {
-			return fmt.Errorf("failed to create subscription line items: %w", err)
+		// Insert in batches to stay within PostgreSQL's 65535 parameter limit.
+		for i := 0; i < len(bulk); i += subscriptionLineItemBatchSize {
+			end := i + subscriptionLineItemBatchSize
+			if end > len(bulk) {
+				end = len(bulk)
+			}
+			if err := client.SubscriptionLineItem.CreateBulk(bulk[i:end]...).Exec(ctx); err != nil {
+				return fmt.Errorf("failed to create subscription line items: %w", err)
+			}
 		}
 
 		return nil
@@ -1066,4 +1109,90 @@ func (r *subscriptionRepository) ListByCustomerID(ctx context.Context, customerI
 
 	// Use the existing List method
 	return r.List(ctx, filter)
+}
+
+// GetRecentSubscriptionsByPlan returns subscription counts grouped by plan for last 7 days
+func (r *subscriptionRepository) GetRecentSubscriptionsByPlan(ctx context.Context) ([]types.SubscriptionPlanCount, error) {
+	tenantID := types.GetTenantID(ctx)
+	envID := types.GetEnvironmentID(ctx)
+
+	span := StartRepositorySpan(ctx, "subscription", "get_recent_subscriptions_by_plan", map[string]interface{}{
+		"tenant_id":      tenantID,
+		"environment_id": envID,
+	})
+	defer FinishSpan(span)
+
+	query := `
+		SELECT
+			p.id AS plan_id,
+			p.name AS plan_name,
+			COUNT(s.id) AS recent_subscription_count
+		FROM subscriptions s
+		JOIN plans p ON p.id = s.plan_id
+		WHERE s.tenant_id = $1
+			AND s.environment_id = $2
+			AND s.created_at >= NOW() - INTERVAL '7 days'
+			AND s.subscription_status = 'active'
+			AND s.status = 'published'
+		GROUP BY p.id, p.name
+		ORDER BY recent_subscription_count DESC`
+
+	rows, err := r.client.Reader(ctx).QueryContext(ctx, query, tenantID, envID)
+	if err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).WithHint("failed to get recent subscriptions by plan").Mark(ierr.ErrDatabase)
+	}
+	defer rows.Close()
+
+	var results []types.SubscriptionPlanCount
+	for rows.Next() {
+		var result types.SubscriptionPlanCount
+		if err := rows.Scan(&result.PlanID, &result.PlanName, &result.Count); err != nil {
+			SetSpanError(span, err)
+			return nil, ierr.WithError(err).WithHint("failed to scan recent subscriptions row").Mark(ierr.ErrDatabase)
+		}
+		results = append(results, result)
+	}
+
+	if err := rows.Err(); err != nil {
+		SetSpanError(span, err)
+		return nil, ierr.WithError(err).WithHint("failed to iterate recent subscriptions rows").Mark(ierr.ErrDatabase)
+	}
+
+	SetSpanSuccess(span)
+	return results, nil
+}
+
+// GetSubscriptionsWithAutoInvoiceThreshold returns active, published subscriptions (paginated)
+// where auto_invoice_threshold is set directly on the subscription.
+// this runs without the tenant and environment filters applied,only use this for auto invoice threshold billing.
+func (r *subscriptionRepository) GetSubscriptionsWithAutoInvoiceThreshold(ctx context.Context, limit, offset int) ([]*domainSub.Subscription, error) {
+
+	subs, err := r.client.Reader(ctx).Subscription.Query().
+		Where(
+			subscription.Status(string(types.StatusPublished)),
+			subscription.SubscriptionStatusEQ(types.SubscriptionStatusActive),
+			subscription.AutoInvoiceThresholdNotNil(),
+			subscription.AutoInvoiceThresholdGT(decimal.Zero),
+		).
+		Order(ent.Asc(subscription.FieldID)).
+		Limit(limit).
+		Offset(offset).
+		All(ctx)
+	if err != nil {
+		return nil, ierr.WithError(err).
+			WithHint("Failed to fetch threshold subscriptions").
+			Mark(ierr.ErrDatabase)
+	}
+
+	if len(subs) == 0 {
+		return []*domainSub.Subscription{}, nil
+	}
+
+	result := make([]*domainSub.Subscription, len(subs))
+	for i, sub := range subs {
+		result[i] = domainSub.GetSubscriptionFromEnt(sub)
+	}
+
+	return result, nil
 }

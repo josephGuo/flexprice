@@ -284,6 +284,20 @@ func (_c *SubscriptionLineItemCreate) SetBillingPeriod(v types.BillingPeriod) *S
 	return _c
 }
 
+// SetBillingPeriodCount sets the "billing_period_count" field.
+func (slic *SubscriptionLineItemCreate) SetBillingPeriodCount(i int) *SubscriptionLineItemCreate {
+	slic.mutation.SetBillingPeriodCount(i)
+	return slic
+}
+
+// SetNillableBillingPeriodCount sets the "billing_period_count" field if the given value is not nil.
+func (slic *SubscriptionLineItemCreate) SetNillableBillingPeriodCount(i *int) *SubscriptionLineItemCreate {
+	if i != nil {
+		slic.SetBillingPeriodCount(*i)
+	}
+	return slic
+}
+
 // SetInvoiceCadence sets the "invoice_cadence" field.
 func (_c *SubscriptionLineItemCreate) SetInvoiceCadence(v types.InvoiceCadence) *SubscriptionLineItemCreate {
 	_c.mutation.SetInvoiceCadence(v)
@@ -294,20 +308,6 @@ func (_c *SubscriptionLineItemCreate) SetInvoiceCadence(v types.InvoiceCadence) 
 func (_c *SubscriptionLineItemCreate) SetNillableInvoiceCadence(v *types.InvoiceCadence) *SubscriptionLineItemCreate {
 	if v != nil {
 		_c.SetInvoiceCadence(*v)
-	}
-	return _c
-}
-
-// SetTrialPeriod sets the "trial_period" field.
-func (_c *SubscriptionLineItemCreate) SetTrialPeriod(v int) *SubscriptionLineItemCreate {
-	_c.mutation.SetTrialPeriod(v)
-	return _c
-}
-
-// SetNillableTrialPeriod sets the "trial_period" field if the given value is not nil.
-func (_c *SubscriptionLineItemCreate) SetNillableTrialPeriod(v *int) *SubscriptionLineItemCreate {
-	if v != nil {
-		_c.SetTrialPeriod(*v)
 	}
 	return _c
 }
@@ -352,6 +352,20 @@ func (_c *SubscriptionLineItemCreate) SetNillableSubscriptionPhaseID(v *string) 
 		_c.SetSubscriptionPhaseID(*v)
 	}
 	return _c
+}
+
+// SetAddonAssociationID sets the "addon_association_id" field.
+func (slic *SubscriptionLineItemCreate) SetAddonAssociationID(s string) *SubscriptionLineItemCreate {
+	slic.mutation.SetAddonAssociationID(s)
+	return slic
+}
+
+// SetNillableAddonAssociationID sets the "addon_association_id" field if the given value is not nil.
+func (slic *SubscriptionLineItemCreate) SetNillableAddonAssociationID(s *string) *SubscriptionLineItemCreate {
+	if s != nil {
+		slic.SetAddonAssociationID(*s)
+	}
+	return slic
 }
 
 // SetMetadata sets the "metadata" field.
@@ -444,6 +458,20 @@ func (_c *SubscriptionLineItemCreate) SetNillableCommitmentWindowed(v *bool) *Su
 	return _c
 }
 
+// SetCommitmentDuration sets the "commitment_duration" field.
+func (slic *SubscriptionLineItemCreate) SetCommitmentDuration(tp types.BillingPeriod) *SubscriptionLineItemCreate {
+	slic.mutation.SetCommitmentDuration(tp)
+	return slic
+}
+
+// SetNillableCommitmentDuration sets the "commitment_duration" field if the given value is not nil.
+func (slic *SubscriptionLineItemCreate) SetNillableCommitmentDuration(tp *types.BillingPeriod) *SubscriptionLineItemCreate {
+	if tp != nil {
+		slic.SetCommitmentDuration(*tp)
+	}
+	return slic
+}
+
 // SetID sets the "id" field.
 func (_c *SubscriptionLineItemCreate) SetID(v string) *SubscriptionLineItemCreate {
 	_c.mutation.SetID(v)
@@ -529,9 +557,9 @@ func (_c *SubscriptionLineItemCreate) defaults() {
 		v := subscriptionlineitem.DefaultQuantity
 		_c.mutation.SetQuantity(v)
 	}
-	if _, ok := _c.mutation.TrialPeriod(); !ok {
-		v := subscriptionlineitem.DefaultTrialPeriod
-		_c.mutation.SetTrialPeriod(v)
+	if _, ok := _c.mutation.BillingPeriodCount(); !ok {
+		v := subscriptionlineitem.DefaultBillingPeriodCount
+		_c.mutation.SetBillingPeriodCount(v)
 	}
 	if _, ok := _c.mutation.CommitmentTrueUpEnabled(); !ok {
 		v := subscriptionlineitem.DefaultCommitmentTrueUpEnabled
@@ -613,19 +641,24 @@ func (_c *SubscriptionLineItemCreate) check() error {
 			return &ValidationError{Name: "billing_period", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.billing_period": %w`, err)}
 		}
 	}
+	if _, ok := _c.mutation.BillingPeriodCount(); !ok {
+		return &ValidationError{Name: "billing_period_count", err: errors.New(`ent: missing required field "SubscriptionLineItem.billing_period_count"`)}
+	}
 	if v, ok := _c.mutation.InvoiceCadence(); ok {
 		if err := v.Validate(); err != nil {
 			return &ValidationError{Name: "invoice_cadence", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.invoice_cadence": %w`, err)}
 		}
-	}
-	if _, ok := _c.mutation.TrialPeriod(); !ok {
-		return &ValidationError{Name: "trial_period", err: errors.New(`ent: missing required field "SubscriptionLineItem.trial_period"`)}
 	}
 	if _, ok := _c.mutation.CommitmentTrueUpEnabled(); !ok {
 		return &ValidationError{Name: "commitment_true_up_enabled", err: errors.New(`ent: missing required field "SubscriptionLineItem.commitment_true_up_enabled"`)}
 	}
 	if _, ok := _c.mutation.CommitmentWindowed(); !ok {
 		return &ValidationError{Name: "commitment_windowed", err: errors.New(`ent: missing required field "SubscriptionLineItem.commitment_windowed"`)}
+	}
+	if v, ok := _c.mutation.CommitmentDuration(); ok {
+		if err := v.Validate(); err != nil {
+			return &ValidationError{Name: "commitment_duration", err: fmt.Errorf(`ent: validator failed for field "SubscriptionLineItem.commitment_duration": %w`, err)}
+		}
 	}
 	if len(_c.mutation.SubscriptionIDs()) == 0 {
 		return &ValidationError{Name: "subscription", err: errors.New(`ent: missing required edge "SubscriptionLineItem.subscription"`)}
@@ -749,13 +782,13 @@ func (_c *SubscriptionLineItemCreate) createSpec() (*SubscriptionLineItem, *sqlg
 		_spec.SetField(subscriptionlineitem.FieldBillingPeriod, field.TypeString, value)
 		_node.BillingPeriod = value
 	}
+	if value, ok := _c.mutation.BillingPeriodCount(); ok {
+		_spec.SetField(subscriptionlineitem.FieldBillingPeriodCount, field.TypeInt, value)
+		_node.BillingPeriodCount = value
+	}
 	if value, ok := _c.mutation.InvoiceCadence(); ok {
 		_spec.SetField(subscriptionlineitem.FieldInvoiceCadence, field.TypeString, value)
 		_node.InvoiceCadence = value
-	}
-	if value, ok := _c.mutation.TrialPeriod(); ok {
-		_spec.SetField(subscriptionlineitem.FieldTrialPeriod, field.TypeInt, value)
-		_node.TrialPeriod = value
 	}
 	if value, ok := _c.mutation.StartDate(); ok {
 		_spec.SetField(subscriptionlineitem.FieldStartDate, field.TypeTime, value)
@@ -768,6 +801,10 @@ func (_c *SubscriptionLineItemCreate) createSpec() (*SubscriptionLineItem, *sqlg
 	if value, ok := _c.mutation.SubscriptionPhaseID(); ok {
 		_spec.SetField(subscriptionlineitem.FieldSubscriptionPhaseID, field.TypeString, value)
 		_node.SubscriptionPhaseID = &value
+	}
+	if value, ok := _c.mutation.AddonAssociationID(); ok {
+		_spec.SetField(subscriptionlineitem.FieldAddonAssociationID, field.TypeString, value)
+		_node.AddonAssociationID = &value
 	}
 	if value, ok := _c.mutation.Metadata(); ok {
 		_spec.SetField(subscriptionlineitem.FieldMetadata, field.TypeJSON, value)
@@ -796,6 +833,10 @@ func (_c *SubscriptionLineItemCreate) createSpec() (*SubscriptionLineItem, *sqlg
 	if value, ok := _c.mutation.CommitmentWindowed(); ok {
 		_spec.SetField(subscriptionlineitem.FieldCommitmentWindowed, field.TypeBool, value)
 		_node.CommitmentWindowed = value
+	}
+	if value, ok := _c.mutation.CommitmentDuration(); ok {
+		_spec.SetField(subscriptionlineitem.FieldCommitmentDuration, field.TypeString, value)
+		_node.CommitmentDuration = &value
 	}
 	if nodes := _c.mutation.SubscriptionIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

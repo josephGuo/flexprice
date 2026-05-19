@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/flexprice/flexprice/ent/feature"
 	"github.com/flexprice/flexprice/internal/types"
+	"github.com/shopspring/decimal"
 )
 
 // Feature is the model entity for the Feature schema.
@@ -49,9 +50,17 @@ type Feature struct {
 	UnitSingular *string `json:"unit_singular,omitempty"`
 	// UnitPlural holds the value of the "unit_plural" field.
 	UnitPlural *string `json:"unit_plural,omitempty"`
+	// ReportingUnitSingular holds the value of the "reporting_unit_singular" field.
+	ReportingUnitSingular *string `json:"reporting_unit_singular,omitempty"`
+	// ReportingUnitPlural holds the value of the "reporting_unit_plural" field.
+	ReportingUnitPlural *string `json:"reporting_unit_plural,omitempty"`
+	// ReportingUnitConversionRate holds the value of the "reporting_unit_conversion_rate" field.
+	ReportingUnitConversionRate *decimal.Decimal `json:"reporting_unit_conversion_rate,omitempty"`
 	// AlertSettings holds the value of the "alert_settings" field.
 	AlertSettings types.AlertSettings `json:"alert_settings,omitempty"`
-	selectValues  sql.SelectValues
+	// GroupID holds the value of the "group_id" field.
+	GroupID      *string `json:"group_id,omitempty"`
+	selectValues sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -59,9 +68,11 @@ func (*Feature) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case feature.FieldReportingUnitConversionRate:
+			values[i] = &sql.NullScanner{S: new(decimal.Decimal)}
 		case feature.FieldMetadata, feature.FieldAlertSettings:
 			values[i] = new([]byte)
-		case feature.FieldID, feature.FieldTenantID, feature.FieldStatus, feature.FieldCreatedBy, feature.FieldUpdatedBy, feature.FieldEnvironmentID, feature.FieldLookupKey, feature.FieldName, feature.FieldDescription, feature.FieldType, feature.FieldMeterID, feature.FieldUnitSingular, feature.FieldUnitPlural:
+		case feature.FieldID, feature.FieldTenantID, feature.FieldStatus, feature.FieldCreatedBy, feature.FieldUpdatedBy, feature.FieldEnvironmentID, feature.FieldLookupKey, feature.FieldName, feature.FieldDescription, feature.FieldType, feature.FieldMeterID, feature.FieldUnitSingular, feature.FieldUnitPlural, feature.FieldReportingUnitSingular, feature.FieldReportingUnitPlural, feature.FieldGroupID:
 			values[i] = new(sql.NullString)
 		case feature.FieldCreatedAt, feature.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -182,6 +193,27 @@ func (_m *Feature) assignValues(columns []string, values []any) error {
 				_m.UnitPlural = new(string)
 				*_m.UnitPlural = value.String
 			}
+		case feature.FieldReportingUnitSingular:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field reporting_unit_singular", values[i])
+			} else if value.Valid {
+				_m.ReportingUnitSingular = new(string)
+				*_m.ReportingUnitSingular = value.String
+			}
+		case feature.FieldReportingUnitPlural:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field reporting_unit_plural", values[i])
+			} else if value.Valid {
+				_m.ReportingUnitPlural = new(string)
+				*_m.ReportingUnitPlural = value.String
+			}
+		case feature.FieldReportingUnitConversionRate:
+			if value, ok := values[i].(*sql.NullScanner); !ok {
+				return fmt.Errorf("unexpected type %T for field reporting_unit_conversion_rate", values[i])
+			} else if value.Valid {
+				_m.ReportingUnitConversionRate = new(decimal.Decimal)
+				*_m.ReportingUnitConversionRate = *value.S.(*decimal.Decimal)
+			}
 		case feature.FieldAlertSettings:
 			if value, ok := values[i].(*[]byte); !ok {
 				return fmt.Errorf("unexpected type %T for field alert_settings", values[i])
@@ -189,6 +221,13 @@ func (_m *Feature) assignValues(columns []string, values []any) error {
 				if err := json.Unmarshal(*value, &_m.AlertSettings); err != nil {
 					return fmt.Errorf("unmarshal field alert_settings: %w", err)
 				}
+			}
+		case feature.FieldGroupID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field group_id", values[i])
+			} else if value.Valid {
+				_m.GroupID = new(string)
+				*_m.GroupID = value.String
 			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
@@ -279,8 +318,28 @@ func (_m *Feature) String() string {
 		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
+	if v := _m.ReportingUnitSingular; v != nil {
+		builder.WriteString("reporting_unit_singular=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ReportingUnitPlural; v != nil {
+		builder.WriteString("reporting_unit_plural=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ReportingUnitConversionRate; v != nil {
+		builder.WriteString("reporting_unit_conversion_rate=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
 	builder.WriteString("alert_settings=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AlertSettings))
+	builder.WriteString(", ")
+	if v := _m.GroupID; v != nil {
+		builder.WriteString("group_id=")
+		builder.WriteString(*v)
+	}
 	builder.WriteByte(')')
 	return builder.String()
 }

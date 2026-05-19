@@ -66,7 +66,7 @@ func (s *CustomerServiceSuite) TestCreateCustomer() {
 		request       dto.CreateCustomerRequest
 		setup         func()
 		expectedError bool
-		errorCode     string
+		errorCode     ierr.ErrorCode
 	}{
 		{
 			name: "valid_customer",
@@ -176,7 +176,7 @@ func (s *CustomerServiceSuite) TestGetCustomer() {
 		id               string
 		setup            func()
 		expectedError    bool
-		errorCode        string
+		errorCode        ierr.ErrorCode
 		expectedCustomer *domainCustomer.Customer
 	}{
 		{
@@ -279,7 +279,7 @@ func (s *CustomerServiceSuite) TestUpdateCustomer() {
 		request       dto.UpdateCustomerRequest
 		setup         func()
 		expectedError bool
-		errorCode     string
+		errorCode     ierr.ErrorCode
 	}{
 		{
 			name: "valid_update",
@@ -356,7 +356,7 @@ func (s *CustomerServiceSuite) TestDeleteCustomer() {
 		id            string
 		setup         func()
 		expectedError bool
-		errorCode     string
+		errorCode     ierr.ErrorCode
 	}{
 		{
 			name: "delete_existing_customer",
@@ -478,6 +478,103 @@ func (s *CustomerServiceSuite) TestDeleteCustomer() {
 	}
 }
 
+func (s *CustomerServiceSuite) TestGetCustomersMetadataFilter() {
+	s.SetupTest()
+
+	customers := []*domainCustomer.Customer{
+		{
+			ID:         "cust-meta-1",
+			Name:       "Enterprise US",
+			ExternalID: "ext-meta-1",
+			Metadata:   map[string]string{"plan": "enterprise", "region": "us-east"},
+		},
+		{
+			ID:         "cust-meta-2",
+			Name:       "Enterprise EU",
+			ExternalID: "ext-meta-2",
+			Metadata:   map[string]string{"plan": "enterprise", "region": "eu-west"},
+		},
+		{
+			ID:         "cust-meta-3",
+			Name:       "Starter US",
+			ExternalID: "ext-meta-3",
+			Metadata:   map[string]string{"plan": "starter", "region": "us-east"},
+		},
+		{
+			ID:         "cust-meta-4",
+			Name:       "No Metadata",
+			ExternalID: "ext-meta-4",
+		},
+	}
+	for _, c := range customers {
+		s.Require().NoError(s.GetStores().CustomerRepo.Create(s.ctx, c))
+	}
+
+	baseFilter := func(meta map[string]string) *types.CustomerFilter {
+		f := &types.CustomerFilter{
+			QueryFilter: types.NewDefaultQueryFilter(),
+		}
+		if len(meta) > 0 {
+			f.MetadataFilter = &types.MetadataFilter{Metadata: meta}
+		}
+		return f
+	}
+
+	testCases := []struct {
+		name          string
+		filter        *types.CustomerFilter
+		expectedIDs   []string
+		expectedCount int
+	}{
+		{
+			name:          "single_key_match",
+			filter:        baseFilter(map[string]string{"plan": "enterprise"}),
+			expectedCount: 2,
+			expectedIDs:   []string{"cust-meta-1", "cust-meta-2"},
+		},
+		{
+			name:          "multiple_keys_and_semantics",
+			filter:        baseFilter(map[string]string{"plan": "enterprise", "region": "us-east"}),
+			expectedCount: 1,
+			expectedIDs:   []string{"cust-meta-1"},
+		},
+		{
+			name:          "no_match",
+			filter:        baseFilter(map[string]string{"plan": "pro"}),
+			expectedCount: 0,
+			expectedIDs:   []string{},
+		},
+		{
+			name:          "region_only",
+			filter:        baseFilter(map[string]string{"region": "us-east"}),
+			expectedCount: 2,
+			expectedIDs:   []string{"cust-meta-1", "cust-meta-3"},
+		},
+		{
+			name:          "empty_filter_returns_all",
+			filter:        baseFilter(nil),
+			expectedCount: 4,
+		},
+	}
+
+	for _, tc := range testCases {
+		s.Run(tc.name, func() {
+			resp, err := s.service.GetCustomers(s.ctx, tc.filter)
+			s.Require().NoError(err)
+			s.Require().NotNil(resp)
+			s.Equal(tc.expectedCount, len(resp.Items), "unexpected result count")
+
+			if len(tc.expectedIDs) > 0 {
+				gotIDs := make([]string, len(resp.Items))
+				for i, item := range resp.Items {
+					gotIDs[i] = item.ID
+				}
+				s.ElementsMatch(tc.expectedIDs, gotIDs)
+			}
+		})
+	}
+}
+
 func (s *CustomerServiceSuite) TestGetCustomerByLookupKey() {
 	customer := &domainCustomer.Customer{
 		ID:                "cust-1",
@@ -501,7 +598,7 @@ func (s *CustomerServiceSuite) TestGetCustomerByLookupKey() {
 		lookupKey        string
 		setup            func()
 		expectedError    bool
-		errorCode        string
+		errorCode        ierr.ErrorCode
 		expectedCustomer *domainCustomer.Customer
 	}{
 		{
