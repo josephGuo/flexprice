@@ -19,10 +19,10 @@ import (
 )
 
 type Configuration struct {
-	Deployment                 DeploymentConfig                 `validate:"required"`
-	Server                     ServerConfig                     `validate:"required"`
-	Auth                       AuthConfig                       `validate:"required"`
-	Kafka                      KafkaConfig                      `validate:"required"`
+	Deployment DeploymentConfig `validate:"required"`
+	Server     ServerConfig     `validate:"required"`
+	Auth       AuthConfig       `validate:"required"`
+	Kafka      KafkaConfig      `validate:"required"`
 	// KafkaSecondary is the optional second Kafka cluster the source event publisher also
 	// writes to during the AWS→GCP migration (the "other" cloud's cluster). When set
 	// (non-nil) every event is published to it in addition to the local `kafka` cluster;
@@ -63,6 +63,7 @@ type Configuration struct {
 	OAuth                      OAuthConfig                      `mapstructure:"oauth" validate:"required"`
 	WalletBalanceAlert         WalletBalanceAlertConfig         `mapstructure:"wallet_balance_alert" validate:"required"`
 	CustomerPortal             CustomerPortalConfig             `mapstructure:"customer_portal" validate:"required"`
+	Checkout                   CheckoutConfig                   `mapstructure:"checkout" validate:"omitempty"`
 	Redis                      RedisConfig                      `mapstructure:"redis" validate:"required"`
 	RawEventsReprocessing      RawEventsReprocessingConfig      `mapstructure:"raw_events_reprocessing" validate:"required"`
 	RawEventConsumption        RawEventConsumptionConfig        `mapstructure:"raw_event_consumption" validate:"required"`
@@ -626,6 +627,10 @@ type CostSheetUsageTrackingLazyConfig struct {
 	ConsumerGroup string `mapstructure:"consumer_group" default:"v1_costsheet_usage_tracking_service_lazy"`
 }
 
+type CheckoutConfig struct {
+	BaseURL string `mapstructure:"base_url" validate:"required,url"`
+}
+
 type CustomerPortalConfig struct {
 	URL               string `mapstructure:"url" validate:"required"`
 	TokenTimeoutHours int    `mapstructure:"token_timeout_hours" validate:"required"`
@@ -680,6 +685,14 @@ func NewConfig() (*Configuration, error) {
 	_ = v.BindEnv("clickhouse.username", "FLEXPRICE_CLICKHOUSE_USERNAME")
 	_ = v.BindEnv("clickhouse.address", "FLEXPRICE_CLICKHOUSE_ADDRESS")
 	_ = v.BindEnv("clickhouse.database", "FLEXPRICE_CLICKHOUSE_DATABASE")
+
+	// Redis cluster_mode/key_prefix are supplied only as env vars by the Helm chart
+	// (they are not rendered into config.yaml). viper's Unmarshal does not consult
+	// AutomaticEnv for keys absent from the config file, so without these explicit
+	// binds ClusterMode silently resolves to false and a single-node client is used
+	// against a cluster-mode endpoint, causing "MOVED" errors on every off-slot key.
+	_ = v.BindEnv("redis.cluster_mode", "FLEXPRICE_REDIS_CLUSTER_MODE")
+	_ = v.BindEnv("redis.key_prefix", "FLEXPRICE_REDIS_KEY_PREFIX")
 
 	// Explicitly bind unified OTel config vars — AutomaticEnv misses nested keys with underscores
 	_ = v.BindEnv("otel.enabled", "FLEXPRICE_OTEL_ENABLED")
