@@ -3087,6 +3087,25 @@ func aggregateBooleanEntitlementsForBilling(entitlements []*entitlement.Entitlem
 	}
 }
 
+func aggregateConfigEntitlementsForBilling(entitlements []*entitlement.Entitlement) *dto.AggregatedEntitlement {
+	isEnabled := false
+	configValues := make([]map[string]any, 0)
+
+	for _, e := range entitlements {
+		if e.IsEnabled {
+			isEnabled = true
+			if len(e.ConfigValue) > 0 {
+				configValues = append(configValues, e.ConfigValue)
+			}
+		}
+	}
+
+	return &dto.AggregatedEntitlement{
+		IsEnabled:    isEnabled,
+		ConfigValues: configValues,
+	}
+}
+
 func aggregateStaticEntitlementsForBilling(entitlements []*entitlement.Entitlement) *dto.AggregatedEntitlement {
 	isEnabled := false
 	staticValues := []string{}
@@ -3173,6 +3192,7 @@ func (s *billingService) AggregateEntitlements(params *dto.AggregateEntitlements
 			IsEnabled:      ent.IsEnabled,
 			UsageLimit:     ent.UsageLimit,
 			StaticValue:    ent.StaticValue,
+			ConfigValue:    ent.ConfigValue,
 		}
 
 		// Add source to feature sources
@@ -3212,6 +3232,7 @@ func (s *billingService) AggregateEntitlements(params *dto.AggregateEntitlements
 				UsageResetPeriod: types.EntitlementUsageResetPeriod(entResp.UsageResetPeriod),
 				IsSoftLimit:      entResp.IsSoftLimit,
 				StaticValue:      entResp.StaticValue,
+				ConfigValue:      entResp.ConfigValue,
 			}
 			domainEntitlements = append(domainEntitlements, domainEnt)
 		}
@@ -3225,6 +3246,8 @@ func (s *billingService) AggregateEntitlements(params *dto.AggregateEntitlements
 			aggregatedEntitlement = aggregateBooleanEntitlementsForBilling(domainEntitlements)
 		case types.FeatureTypeStatic:
 			aggregatedEntitlement = aggregateStaticEntitlementsForBilling(domainEntitlements)
+		case types.FeatureTypeConfig:
+			aggregatedEntitlement = aggregateConfigEntitlementsForBilling(domainEntitlements)
 		default:
 			// Skip unknown feature types
 			continue
@@ -3255,8 +3278,9 @@ func (s *billingService) GetCustomerEntitlements(ctx context.Context, customerID
 	}
 
 	resp := &dto.CustomerEntitlementsResponse{
-		CustomerID: customerID,
-		Features:   []*dto.AggregatedFeature{},
+		CustomerID:    customerID,
+		Subscriptions: []*dto.SubscriptionResponse{},
+		Features:      []*dto.AggregatedFeature{},
 	}
 
 	// 1. Get active subscriptions for the customer
@@ -3284,6 +3308,7 @@ func (s *billingService) GetCustomerEntitlements(ctx context.Context, customerID
 
 	// Collect all entitlements from all subscriptions
 	allEntitlements := make([]*dto.EntitlementResponse, 0)
+	allSubscriptions := make([]*dto.SubscriptionResponse, 0, len(subscriptions))
 
 	// Process each subscription to get its entitlements (including both plan and addon entitlements)
 	for _, sub := range subscriptions {
@@ -3312,6 +3337,8 @@ func (s *billingService) GetCustomerEntitlements(ctx context.Context, customerID
 		} else {
 			allEntitlements = append(allEntitlements, subEntitlements...)
 		}
+
+		allSubscriptions = append(allSubscriptions, &dto.SubscriptionResponse{Subscription: sub})
 	}
 
 	// Use the generic aggregation function
@@ -3322,8 +3349,9 @@ func (s *billingService) GetCustomerEntitlements(ctx context.Context, customerID
 
 	// Build final response
 	response := &dto.CustomerEntitlementsResponse{
-		CustomerID: customerID,
-		Features:   aggregatedFeatures,
+		CustomerID:    customerID,
+		Subscriptions: allSubscriptions,
+		Features:      aggregatedFeatures,
 	}
 
 	return response, nil
@@ -3636,6 +3664,7 @@ func (s *billingService) GetCustomerUsageSummary(ctx context.Context, customerID
 		types.FeatureTypeMetered: 1,
 		types.FeatureTypeStatic:  2,
 		types.FeatureTypeBoolean: 3,
+		types.FeatureTypeConfig:  4,
 	}
 
 	sort.SliceStable(features, func(i, j int) bool {
