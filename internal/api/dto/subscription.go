@@ -321,6 +321,27 @@ type SubscriptionInheritanceConfig struct {
 	GroupedInvoicingChildrenToCreate []GroupedInvoicingChildRequest `json:"grouped_invoicing_children_to_create,omitempty" validate:"omitempty,dive"`
 }
 
+func (c *SubscriptionInheritanceConfig) checkoutUnsupportedFields() bool {
+	if c == nil {
+		return false
+	}
+
+	if len(c.ExternalCustomerIDsToInheritSubscription) > 0 {
+		return true
+	}
+	if c.ParentSubscriptionID != "" {
+		return true
+	}
+	if c.InvoicingCustomerExternalID != nil {
+		return true
+	}
+	if len(c.SubscriptionsIDsForGroupedInvoicing) > 0 {
+		return true
+	}
+
+	return false
+}
+
 func (c *SubscriptionInheritanceConfig) Validate() error {
 	if c == nil {
 		return nil
@@ -836,6 +857,14 @@ func (r *CreateSubscriptionRequest) validateCheckoutCompatibility() error {
 		return nil
 	}
 
+	// A grouped_invoicing child is built by createGroupedInvoicingChildren, which
+	// sets parent_subscription_id and passes the parent's checkout down. That
+	// combination is rejected by checkoutUnsupportedFields below, so the
+	// inheritance check alone is skipped for this type. The status and phase
+	// checks still apply: the generated child sets neither, and a request that
+	// does set them is as unsupported here as anywhere else.
+	isGroupedInvoicingChild := r.SubscriptionType == types.SubscriptionTypeGroupedInvoicing
+
 	if r.SubscriptionStatus != "" {
 		return ierr.NewError("subscription_status is not supported with checkout").
 			WithHint("Remove subscription_status; a checkout-gated subscription is created as draft and activated once payment succeeds").
@@ -849,18 +878,26 @@ func (r *CreateSubscriptionRequest) validateCheckoutCompatibility() error {
 			Mark(ierr.ErrValidation)
 	}
 
-	// TODO: Handle inheritance for checkout-gated creates
-	if r.Inheritance != nil {
-		return ierr.NewError("inheritance is not supported with checkout").
-			WithHint("Remove checkout to create an inherited or grouped-invoicing subscription").
+	if !isGroupedInvoicingChild && r.Inheritance.checkoutUnsupportedFields() {
+		return ierr.NewError("inheritance field is not supported with checkout").
+			WithHint("Only grouped_invoicing_children_to_create is supported with checkout; remove the other inheritance fields, or remove checkout").
 			Mark(ierr.ErrValidation)
+	}
+
+	if r.Inheritance != nil {
+		for i, child := range r.Inheritance.GroupedInvoicingChildrenToCreate {
+			if len(child.Phases) > 0 {
+				return ierr.NewError("phases is not supported with checkout").
+					WithHintf("Remove phases from grouped_invoicing_children_to_create[%d], or remove checkout", i).
+					Mark(ierr.ErrValidation)
+			}
+		}
 	}
 
 	return nil
 }
 
 func (r *CreateSubscriptionRequest) Validate() error {
-
 	err := validator.ValidateRequest(r)
 	if err != nil {
 		return err

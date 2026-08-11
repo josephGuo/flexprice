@@ -4,7 +4,9 @@ import (
 	"github.com/flexprice/flexprice/docs/swagger"
 	v1 "github.com/flexprice/flexprice/internal/api/v1"
 	"github.com/flexprice/flexprice/internal/config"
+	domainEnvironment "github.com/flexprice/flexprice/internal/domain/environment"
 	domainIncomingWebhookEvent "github.com/flexprice/flexprice/internal/domain/incomingwebhookevent"
+	domainUser "github.com/flexprice/flexprice/internal/domain/user"
 	"github.com/flexprice/flexprice/internal/ee/service"
 	"github.com/flexprice/flexprice/internal/logger"
 	"github.com/flexprice/flexprice/internal/rbac"
@@ -76,6 +78,8 @@ func NewRouter(
 	rbacService *rbac.RBACService,
 	tenantService service.TenantService,
 	webhookRequestRepo domainIncomingWebhookEvent.Repository,
+	environmentRepo domainEnvironment.Repository,
+	userRepo domainUser.Repository,
 ) *gin.Engine {
 	// gin.SetMode(gin.ReleaseMode)
 
@@ -112,6 +116,7 @@ func NewRouter(
 	// Initialize permission middleware
 	permissionMW := middleware.NewPermissionMiddleware(rbacService, logger)
 	write := permissionMW.RequirePermission // shorthand used on every write route
+	read := permissionMW.RequirePermission  // shorthand used on read routes that opt in to an RBAC gate
 
 	// Add middleware to set swagger host dynamically
 	router.Use(func(c *gin.Context) {
@@ -137,7 +142,7 @@ func NewRouter(
 		v1Public.POST("/auth/login", handlers.Auth.Login)
 	}
 
-	private := router.Group("/", middleware.AuthenticateMiddleware(cfg, secretService, logger))
+	private := router.Group("/", middleware.AuthenticateMiddleware(cfg, secretService, environmentRepo, userRepo, logger))
 	private.Use(middleware.TenantStatusMiddleware(tenantService, logger))
 	private.Use(middleware.EnvAccessMiddleware(envAccessService, logger))
 	private.Use(middleware.TenantContextMiddleware)
@@ -158,8 +163,8 @@ func NewRouter(
 		environment := v1Private.Group("/environments")
 		{
 			environment.POST("", write(types.EntityEnvironment, types.ActionWrite), handlers.Environment.CreateEnvironment)
-			environment.GET("", handlers.Environment.GetEnvironments)
-			environment.GET("/:id", handlers.Environment.GetEnvironment)
+			environment.GET("", read(types.EntityEnvironment, types.ActionRead), handlers.Environment.GetEnvironments)
+			environment.GET("/:id", read(types.EntityEnvironment, types.ActionRead), handlers.Environment.GetEnvironment)
 			environment.PUT("/:id", write(types.EntityEnvironment, types.ActionWrite), handlers.Environment.UpdateEnvironment)
 			environment.POST("/:id/clone", write(types.EntityEnvironment, types.ActionWrite), handlers.Environment.CloneEnvironment)
 		}
@@ -573,7 +578,7 @@ func NewRouter(
 
 		// Admin routes (API Key only)
 		adminRoutes := v1Private.Group("/admin")
-		adminRoutes.Use(middleware.APIKeyAuthMiddleware(cfg, secretService, logger))
+		adminRoutes.Use(middleware.APIKeyAuthMiddleware(cfg, secretService, environmentRepo, logger))
 		{
 			// All admin routes to go here
 		}
@@ -608,11 +613,15 @@ func NewRouter(
 	// Customer Dashboard - Customer-facing APIs (requires dashboard token)
 	customerPortalAPI := router.Group("/v1/customer/portal")
 	customerPortalAPI.Use(middleware.SessionTokenAuthMiddleware(cfg, logger))
+	// The session token carries the tenant, so the portal is subject to the same
+	// tenant suspension rules as the rest of the API. Without this a suspended
+	// tenant's customers could keep mutating data through the portal.
+	customerPortalAPI.Use(middleware.TenantStatusMiddleware(tenantService, logger))
 	customerPortalAPI.Use(middleware.ErrorHandler())
 	{
 		// Customer specific
 		customerPortalAPI.GET("/info", handlers.CustomerPortal.GetCustomer)
-		customerPortalAPI.PUT("/info", handlers.CustomerPortal.UpdateCustomer)
+		customerPortalAPI.PUT("/info", write(types.EntityCustomer, types.ActionWrite), handlers.CustomerPortal.UpdateCustomer)
 		customerPortalAPI.GET("/usage", handlers.CustomerPortal.GetUsageSummary)
 
 		// Subscriptions
@@ -711,14 +720,18 @@ func NewRouter(
 		dashboardRoutes.POST("/revenue-dashboard", handlers.Dashboard.GetRevenueDashboard)
 	}
 
-	// Workflow monitoring routes
+	// Workflow monitoring routes.
+	// These expose Temporal workflow history, which embeds third-party (Stripe,
+	// QuickBooks, Zoho) error payloads, so they are gated on workflow:read even
+	// though they are reads. Search and batch are POST for their request bodies
+	// but are read-only, hence ActionRead rather than ActionWrite.
 	workflows := v1Private.Group("/workflows")
 	{
-		workflows.POST("/search", handlers.Workflow.QueryWorkflows)
-		workflows.POST("/batch", handlers.Workflow.GetWorkflowsBatch)
-		workflows.GET("/:workflow_id/:run_id/summary", handlers.Workflow.GetWorkflowSummary)
-		workflows.GET("/:workflow_id/:run_id/timeline", handlers.Workflow.GetWorkflowTimeline)
-		workflows.GET("/:workflow_id/:run_id", handlers.Workflow.GetWorkflowDetails)
+		workflows.POST("/search", read(types.EntityWorkflow, types.ActionRead), handlers.Workflow.QueryWorkflows)
+		workflows.POST("/batch", read(types.EntityWorkflow, types.ActionRead), handlers.Workflow.GetWorkflowsBatch)
+		workflows.GET("/:workflow_id/:run_id/summary", read(types.EntityWorkflow, types.ActionRead), handlers.Workflow.GetWorkflowSummary)
+		workflows.GET("/:workflow_id/:run_id/timeline", read(types.EntityWorkflow, types.ActionRead), handlers.Workflow.GetWorkflowTimeline)
+		workflows.GET("/:workflow_id/:run_id", read(types.EntityWorkflow, types.ActionRead), handlers.Workflow.GetWorkflowDetails)
 	}
 
 	return router
