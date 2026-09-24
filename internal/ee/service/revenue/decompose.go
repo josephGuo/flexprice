@@ -185,6 +185,121 @@ type dayCharge struct {
 	TierDelta decimal.Decimal
 }
 
+// factGrain is the provisional upsert key: two rows with the same grain are the
+// same row, so a recompute updates in place rather than inserting.
+type factGrain struct {
+	priceID       string
+	subLineItemID string
+	day           string
+	revenueSource types.RevenueSource
+}
+
+func grainOf(f *revenuefact.RevenueFact) factGrain {
+	return factGrain{
+		priceID:       lo.FromPtr(f.PriceID),
+		subLineItemID: lo.FromPtr(f.SubLineItemID),
+		day:           f.Day.Format(dayKeyLayout),
+		revenueSource: f.RevenueSource,
+	}
+}
+
+// carriesNothing reports a row with no money and no quantity behind it: a day
+// on which a line item existed and delivered nothing. A row with zero net but a
+// consumed entitlement is NOT empty — that is how free usage stays visible.
+func carriesNothing(f *revenuefact.RevenueFact) bool {
+	return f.NetAmount.IsZero() &&
+		f.UsageAtListRate.IsZero() &&
+		f.TierDelta.IsZero() &&
+		f.EntitlementAmount.IsZero() &&
+		f.LineDiscount.IsZero() &&
+		f.InvoiceDiscount.IsZero() &&
+		f.BillableQty.IsZero() &&
+		f.EntitlementQty.IsZero()
+}
+
+// sameValues reports whether a recomputed row would write nothing new. It
+// compares every field the upsert would set; id, computed_at and version are
+// excluded because they differ on every recompute by construction, and status
+// because both sides are provisional here.
+//
+// A value returning to zero counts as a change: the upsert never deletes, so
+// skipping that write would leave the old non-zero row standing as stale
+// revenue that no reconciliation catches.
+func sameValues(a, b *revenuefact.RevenueFact) bool {
+	return a.CustomerID == b.CustomerID &&
+		lo.FromPtr(a.MeterID) == lo.FromPtr(b.MeterID) &&
+		a.PeriodStart.Equal(b.PeriodStart) &&
+		a.PeriodEnd.Equal(b.PeriodEnd) &&
+		a.UsageAtListRate.Equal(b.UsageAtListRate) &&
+		a.TierDelta.Equal(b.TierDelta) &&
+		a.EntitlementAmount.Equal(b.EntitlementAmount) &&
+		a.LineDiscount.Equal(b.LineDiscount) &&
+		a.InvoiceDiscount.Equal(b.InvoiceDiscount) &&
+		a.NetAmount.Equal(b.NetAmount) &&
+		a.BillableQty.Equal(b.BillableQty) &&
+		a.EntitlementQty.Equal(b.EntitlementQty) &&
+		a.DecompositionMode == b.DecompositionMode &&
+		a.Currency == b.Currency &&
+		a.IsRevert == b.IsRevert &&
+		lo.FromPtr(a.InvoiceID) == lo.FromPtr(b.InvoiceID) &&
+		lo.FromPtr(a.InvoiceLineItemID) == lo.FromPtr(b.InvoiceLineItemID) &&
+		// The remaining mutable columns. They are unwritten today, but the
+		// upsert updates them on conflict, so leaving them out of the
+		// comparison would strand stale metadata the moment anything sets them.
+		lo.FromPtr(a.AggregationType) == lo.FromPtr(b.AggregationType) &&
+		lo.FromPtr(a.RecognitionMethod) == lo.FromPtr(b.RecognitionMethod) &&
+		sameTime(a.ServiceStart, b.ServiceStart) &&
+		sameTime(a.ServiceEnd, b.ServiceEnd) &&
+		sameTime(a.LockAdjustedDay, b.LockAdjustedDay)
+}
+
+// sameTime compares two nullable instants.
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+// changedRows keeps only the rows that would actually change something. Most of
+// a nightly pass recomputes days that are already stored and identical: on a
+// subscription with hundreds of line items, that was the bulk of the writes.
+//
+// This narrows the WRITE only. Reconciliation must still run on the full set,
+// or an invoice whose rows are mostly unchanged would look like it had lost
+// them.
+func changedRows(computed []*revenuefact.RevenueFact, stored []*revenuefact.RevenueFact) []*revenuefact.RevenueFact {
+	// No early return for an empty `stored`: a first roll is exactly when the
+	// empty-row filter below matters most.
+	byGrain := make(map[factGrain]*revenuefact.RevenueFact, len(stored))
+	for _, row := range stored {
+		byGrain[grainOf(row)] = row
+	}
+
+	changed := make([]*revenuefact.RevenueFact, 0, len(computed))
+	for _, row := range computed {
+		prior, exists := byGrain[grainOf(row)]
+		if exists && sameValues(row, prior) {
+			continue
+		}
+		// A row carrying nothing is worth writing only to correct one that
+		// previously carried something — the upsert never deletes, so that
+		// write is what stops a stale non-zero row standing as revenue. With
+		// no stored row there is nothing to correct, and creating one records
+		// that a line item existed and delivered nothing, which no query asks.
+		//
+		// This is not a marginal saving: on a subscription with hundreds of
+		// line items, a row per line item per elapsed day is the whole table.
+		// Measured on production, 13,464,148 of 13,465,791 rows carried
+		// nothing.
+		if !exists && !row.IsRevert && carriesNothing(row) {
+			continue
+		}
+		changed = append(changed, row)
+	}
+	return changed
+}
+
 // decompositionMode picks period_only where a per-day split would misstate
 // the charge: volume tiering re-rates all units on the final tier, and
 // LATEST/AVG/WEIGHTED_SUM/MAX aggregations are not additive across days —

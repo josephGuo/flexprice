@@ -604,3 +604,99 @@ func TestPeriodDays_SubscriptionTimezone(t *testing.T) {
 	assert.Equal(t, time.UTC, locationOf(""))
 	assert.Equal(t, time.UTC, locationOf("Not/AZone"))
 }
+
+// TestChangedRows: the diff narrows the write, and the only thing that matters
+// is that it never withholds a write that carries a change.
+func TestChangedRows(t *testing.T) {
+	row := func(day string, net string) *revenuefact.RevenueFact {
+		d, err := time.Parse("2006-01-02", day)
+		require.NoError(t, err)
+		return &revenuefact.RevenueFact{
+			PriceID:       lo.ToPtr("price_1"),
+			SubLineItemID: lo.ToPtr("sli_1"),
+			Day:           d,
+			RevenueSource: types.RevenueSourceUsage,
+			NetAmount:     decimal.RequireFromString(net),
+		}
+	}
+
+	stored := []*revenuefact.RevenueFact{row("2026-05-01", "10"), row("2026-05-02", "20")}
+
+	assert.Empty(t, changedRows([]*revenuefact.RevenueFact{row("2026-05-01", "10"), row("2026-05-02", "20")}, stored),
+		"an identical recompute must write nothing")
+
+	changed := changedRows([]*revenuefact.RevenueFact{row("2026-05-01", "10"), row("2026-05-02", "25")}, stored)
+	require.Len(t, changed, 1)
+	assert.Equal(t, "25", changed[0].NetAmount.String(), "only the day that moved is written")
+
+	// A value falling back to zero MUST be written: the upsert never deletes,
+	// so withholding it would leave the old non-zero row standing as revenue
+	// that no reconciliation catches.
+	zeroed := changedRows([]*revenuefact.RevenueFact{row("2026-05-01", "0")}, stored)
+	require.Len(t, zeroed, 1, "a value returning to zero is a change, not a no-op")
+
+	// A new day has no stored counterpart.
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{row("2026-05-03", "5")}, stored), 1)
+
+	// Nothing stored yet: everything is new.
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{row("2026-05-01", "10")}, nil), 1)
+
+	// Same grain, different non-money field still counts as a change.
+	entitled := row("2026-05-01", "10")
+	entitled.EntitlementQty = decimal.NewFromInt(50)
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{entitled}, stored), 1,
+		"entitlement movement is a change even when net is identical")
+}
+
+// TestChangedRows_EmptyRows: a row carrying nothing is written only when it
+// corrects a stored row that carried something. Creating one otherwise records
+// that a line item existed and delivered nothing — on production that was
+// 13,464,148 of 13,465,791 rows.
+func TestChangedRows_EmptyRows(t *testing.T) {
+	empty := func(day string) *revenuefact.RevenueFact {
+		d, err := time.Parse("2006-01-02", day)
+		require.NoError(t, err)
+		return &revenuefact.RevenueFact{
+			PriceID: lo.ToPtr("price_1"), SubLineItemID: lo.ToPtr("sli_1"),
+			Day: d, RevenueSource: types.RevenueSourceUsage,
+		}
+	}
+	paid := func(day, net string) *revenuefact.RevenueFact {
+		r := empty(day)
+		r.NetAmount = decimal.RequireFromString(net)
+		return r
+	}
+
+	// Nothing stored: an empty row is not worth creating.
+	assert.Empty(t, changedRows([]*revenuefact.RevenueFact{empty("2026-05-01")}, nil),
+		"an empty row with nothing to correct must not be written")
+
+	// A row that previously carried value and now does not MUST be written:
+	// the upsert never deletes, so skipping it strands stale revenue.
+	corrected := changedRows(
+		[]*revenuefact.RevenueFact{empty("2026-05-01")},
+		[]*revenuefact.RevenueFact{paid("2026-05-01", "10")},
+	)
+	require.Len(t, corrected, 1, "a value returning to zero must still be written")
+
+	// An already-empty stored row is unchanged, so nothing is written.
+	assert.Empty(t, changedRows(
+		[]*revenuefact.RevenueFact{empty("2026-05-01")},
+		[]*revenuefact.RevenueFact{empty("2026-05-01")},
+	))
+
+	// Rows that carry something are unaffected.
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{paid("2026-05-02", "5")}, nil), 1)
+
+	// Free usage is not "nothing": zero net with a consumed entitlement is how
+	// entitlement coverage stays visible.
+	entitled := empty("2026-05-03")
+	entitled.EntitlementQty = decimal.NewFromInt(100)
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{entitled}, nil), 1,
+		"entitlement-covered usage must still be recorded")
+
+	// A revert posts even at zero so a void nets out.
+	zeroRevert := empty("2026-05-04")
+	zeroRevert.IsRevert = true
+	assert.Len(t, changedRows([]*revenuefact.RevenueFact{zeroRevert}, nil), 1)
+}

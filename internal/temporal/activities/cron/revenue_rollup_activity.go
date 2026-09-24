@@ -8,6 +8,7 @@ import (
 	"github.com/flexprice/flexprice/internal/interfaces"
 	"github.com/flexprice/flexprice/internal/logger"
 	cronModels "github.com/flexprice/flexprice/internal/temporal/models"
+	"github.com/flexprice/flexprice/internal/types"
 	"go.temporal.io/sdk/activity"
 )
 
@@ -34,7 +35,8 @@ func NewRevenueRollupActivities(
 // activity since `since`. The schedule always fires; this early exit is the
 // deployment-wide kill switch, and the tenant-level settings flag gates the
 // actual scan.
-func (a *RevenueRollupActivities) RollupDirtyActivity(ctx context.Context, since time.Time) (*cronModels.RevenueRollupWorkflowResult, error) {
+func (a *RevenueRollupActivities) RollupDirtyActivity(ctx context.Context, in cronModels.RollupDirtyActivityInput) (*cronModels.RevenueRollupWorkflowResult, error) {
+	since := in.Since
 	log := activity.GetLogger(ctx)
 
 	if a.cfg == nil || !a.cfg.Analytics.RevenueRollup.Enabled {
@@ -42,17 +44,56 @@ func (a *RevenueRollupActivities) RollupDirtyActivity(ctx context.Context, since
 		return &cronModels.RevenueRollupWorkflowResult{}, nil
 	}
 
+	// Resume where a previous attempt stopped. Without this every retry starts
+	// at the first subscription and rewrites the same head of the list, so the
+	// tail is never reached.
+	var cursor *types.RollupCursor
+	// An explicit cursor (a manual resume) wins: the previous run's attempts
+	// are spent, so its heartbeat details are gone with it.
+	if in.ResumeAfterSubscriptionID != "" && in.ResumeEnvironmentID != "" {
+		cursor = &types.RollupCursor{
+			EnvironmentID:      in.ResumeEnvironmentID,
+			LastSubscriptionID: in.ResumeAfterSubscriptionID,
+		}
+		log.Info("Resuming revenue rollup dirty scan from an explicit cursor",
+			"environment_id", cursor.EnvironmentID,
+			"after_subscription_id", cursor.LastSubscriptionID)
+	}
+	if cursor == nil && activity.HasHeartbeatDetails(ctx) {
+		var recorded types.RollupCursor
+		if err := activity.GetHeartbeatDetails(ctx, &recorded); err == nil {
+			cursor = &recorded
+			log.Info("Resuming revenue rollup dirty scan",
+				"environment_id", recorded.EnvironmentID,
+				"after_subscription_id", recorded.LastSubscriptionID)
+		}
+	}
+
 	log.Info("Starting revenue rollup dirty scan", "since", since)
 
-	rolled, skipped, err := a.revenueService.RollupDirty(ctx, since)
+	// A scheduled full rebuild repairs anything the incremental triggers miss,
+	// so a gap lasts at most a week instead of persisting.
+	forceFull := a.cfg.Analytics.RevenueRollup.FullRebuildWeekday == int(since.UTC().Weekday())
+	if forceFull {
+		log.Info("Revenue rollup running a full rebuild", "weekday", since.UTC().Weekday().String())
+	}
+
+	result, err := a.revenueService.RollupDirty(ctx, types.RollupDirtyRequest{
+		Since:     since,
+		Cursor:    cursor,
+		ForceFull: forceFull,
+		OnProgress: func(c types.RollupCursor) {
+			activity.RecordHeartbeat(ctx, c)
+		},
+	})
 	if err != nil {
 		a.logger.Error(ctx, "revenue rollup dirty scan failed", "error", err, "since", since)
 		return nil, err
 	}
 
-	a.logger.Info(ctx, "revenue rollup dirty scan completed", "rolled", rolled, "skipped", skipped, "since", since)
-	log.Info("Completed revenue rollup dirty scan", "rolled", rolled, "skipped", skipped)
-	return &cronModels.RevenueRollupWorkflowResult{Rolled: rolled, Skipped: skipped}, nil
+	a.logger.Info(ctx, "revenue rollup dirty scan completed", "rolled", result.Rolled, "skipped", result.Skipped, "since", since)
+	log.Info("Completed revenue rollup dirty scan", "rolled", result.Rolled, "skipped", result.Skipped)
+	return &cronModels.RevenueRollupWorkflowResult{Rolled: result.Rolled, Skipped: result.Skipped}, nil
 }
 
 // ReconcileBookedInvoicesActivity compares recently finalized/voided invoices against their

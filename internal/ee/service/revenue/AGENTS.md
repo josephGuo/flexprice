@@ -29,6 +29,35 @@ Design doc: [FLE-1257 analytics platform ERD](../../../../docs/design/2026-09-10
   (tenant, environment, subscription, price, sub_line_item, day, revenue_source);
   recomputes bump `version` in place. FINAL rows are immutable — a void appends
   contra rows (`is_revert = true`), never edits.
+- **The scan may over-scope, never under-scope.** A subscription rolled
+  unnecessarily costs one batched read and a diff that writes nothing; one
+  wrongly skipped goes silently stale. Every uncertain answer in `scanScopeFor`
+  widens to a full pass, and a scheduled full rebuild is the net underneath.
+  There is no flag to turn the scan off: at production scale a full pass per
+  run does not finish, so correctness has to come from the triggers being
+  right, not from being able to disable them.
+- **Usage is not the only trigger.** A subscription with no usage at all still
+  owes fixed charges, commitment true-ups and — for bucketed windowed
+  commitments — one true-up row per empty window. Most of those are written when
+  the period opens, so `current_period_start`, never-rolled and stale-coverage
+  are triggers in their own right, not conveniences.
+- **A commitment accrues without usage.** The bucketed curve is clamped to
+  today, so a windowed commitment's true-up gains a window every day even when
+  nothing is metered. Those customers are rolled every pass
+  (`customersWithAccruingCommitments`); every other trigger reads them as quiet,
+  and their accrual would stop after the period's opening roll.
+- **A row must carry something.** A row with no money and no quantity behind it
+  records that a line item existed and delivered nothing, which no query asks
+  for — and at hundreds of line items per subscription it is the whole table
+  (measured on production: 13,464,148 of 13,465,791 rows). Such a row is
+  written only when one already exists for its grain, because the upsert never
+  deletes and that write is what stops a stale non-zero row standing as
+  revenue. Zero net with a consumed entitlement is NOT nothing: it is how free
+  usage stays visible.
+- **Reads are batched per subscription, writes are diffed.** `buildUsageCurve`
+  must read from the pre-fetched `rollupInputs.usage(meterID)`; falling back to
+  its own query is one round-trip per line item, which is what made a full pass
+  take hours. Reconciliation runs on the full row set, before the diff.
 - **Tenant scoping.** Every query filters tenant + environment.
 - **Opt-in gates every write.** No row is written for an environment whose
   `revenue_analytics_config` is absent or disabled — not by the batch jobs,
