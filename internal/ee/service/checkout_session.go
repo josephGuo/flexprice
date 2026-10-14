@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/flexprice/flexprice/internal/activity"
 	"github.com/flexprice/flexprice/internal/domain/addonassociation"
 
 	"github.com/flexprice/flexprice/internal/api/dto"
@@ -403,11 +404,17 @@ func (s *checkoutSessionService) terminateCheckoutSession(ctx context.Context, s
 		failureReason = &msg
 	}
 
+	terminalAction := activity.CheckoutSessionExpired
+	if status == types.CheckoutStatusFailed {
+		terminalAction = activity.CheckoutSessionFailed
+	}
+
 	err := s.DB.WithTx(ctx, func(txCtx context.Context) error {
 		if err := s.cleanupCheckoutResources(txCtx, session, reason); err != nil {
 			return err
 		}
 
+		txCtx = activity.WithAction(txCtx, session.ID, terminalAction)
 		claimed, err := s.CheckoutSessionRepo.MarkTerminal(txCtx, session.ID, status, failureReason)
 		if err != nil {
 			return err
@@ -478,10 +485,13 @@ func (s *checkoutSessionService) cleanupCheckoutResources(ctx context.Context, s
 
 	// Only the attaches wrote anything: a gated removal leaves its association active and
 	// billable until payment lands, so an abandoned checkout has nothing to undo for it.
-	if cfg.AddAddonParams != nil && len(cfg.AddAddonParams.Addons) > 0 {
-		ids := lo.Map(cfg.AddAddonParams.Addons, func(ref types.AddAddonRef, _ int) string {
-			return ref.AssociationID
-		})
+	var ids []string
+	for _, params := range cfg.AddAddonEntries() {
+		for _, ref := range params.Addons {
+			ids = append(ids, ref.AssociationID)
+		}
+	}
+	if len(ids) > 0 {
 
 		associations, err := s.AddonAssociationRepo.GetByIDs(ctx, ids)
 		if err != nil {
@@ -607,6 +617,7 @@ func (s *checkoutSessionService) CompleteCheckoutSession(ctx context.Context, se
 
 	// Atomic claim: only one concurrent caller gets n > 0.
 	now := time.Now().UTC()
+	ctx = activity.WithAction(ctx, sessionID, activity.CheckoutSessionCompleted)
 	claimed, err := s.CheckoutSessionRepo.MarkCompleted(ctx, sessionID, now, mergedResult)
 	if err != nil {
 		return err

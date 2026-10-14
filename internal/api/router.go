@@ -39,6 +39,7 @@ type Handlers struct {
 	Tenant                   *v1.TenantHandler
 	Invoice                  *v1.InvoiceHandler
 	Feature                  *v1.FeatureHandler
+	Activity                 *v1.ActivityHandler
 	Entitlement              *v1.EntitlementHandler
 	CreditGrant              *v1.CreditGrantHandler
 	Payment                  *v1.PaymentHandler
@@ -101,6 +102,7 @@ func NewRouter(
 	// Add our custom middleware in order
 	router.Use(
 		middleware.RequestIDMiddleware,       // Generate/extract request ID first
+		middleware.RequestMetaMiddleware,     // Client IP and user agent for activity entries
 		middleware.DBWriterPinMiddleware,     // Per-request read-your-writes pin for DB routing
 		middleware.LoggingMiddleware(logger), // Use our standard logger for HTTP logging
 		middleware.CORSMiddleware,
@@ -337,6 +339,7 @@ func NewRouter(
 			addon.PUT("/:id", write(types.EntityAddon, types.ActionWrite), handlers.Addon.UpdateAddon)
 			addon.GET("/:id/entitlements", handlers.Addon.GetAddonEntitlements)
 			addon.GET("/:id/creditgrants", handlers.Addon.GetAddonCreditGrants)
+			addon.POST("/:id/sync/subscriptions", write(types.EntityAddon, types.ActionWrite), handlers.Addon.SyncAddonPrices)
 			addon.DELETE("/:id", write(types.EntityAddon, types.ActionWrite), handlers.Addon.DeleteAddon)
 		}
 
@@ -460,6 +463,14 @@ func NewRouter(
 			feature.DELETE("/:id", write(types.EntityFeature, types.ActionWrite), handlers.Feature.DeleteFeature)
 			feature.POST("/search", handlers.Feature.QueryFeatures)
 			feature.POST("/:id/clone", write(types.EntityFeature, types.ActionWrite), handlers.Feature.CloneFeature)
+		}
+
+		if cfg.Activity.Enabled {
+			activityRoutes := v1Private.Group("/activity")
+			{
+				activityRoutes.POST("", read(types.EntityActivity, types.ActionRead), handlers.Activity.ListActivity)
+				activityRoutes.GET("/:id", read(types.EntityActivity, types.ActionRead), handlers.Activity.GetActivity)
+			}
 		}
 
 		checkoutSessions := v1Private.Group("/checkout/sessions")
@@ -750,7 +761,7 @@ func NewRouter(
 
 	// Public webhook endpoints (no authentication required)
 	webhooks := v1Public.Group("/webhooks")
-	webhooks.Use(middleware.WebhookLoggingMiddleware(logger, webhookRequestRepo))
+	webhooks.Use(middleware.WebhookActorMiddleware, middleware.WebhookLoggingMiddleware(logger, webhookRequestRepo))
 	{
 		// Stripe webhook endpoint: POST /v1/webhooks/stripe/{tenant_id}/{environment_id}
 		webhooks.POST("/stripe/:tenant_id/:environment_id", handlers.Webhook.HandleStripeWebhook)
