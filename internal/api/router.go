@@ -234,6 +234,8 @@ func NewRouter(
 			meterUsage.POST("/query", handlers.MeterUsage.QueryUsage)
 			meterUsage.POST("/analytics", handlers.MeterUsage.GetAnalytics)
 			meterUsage.POST("/detailed-analytics", handlers.MeterUsage.GetDetailedAnalytics)
+			meterUsage.POST("/properties", handlers.MeterUsage.GetPropertyKeys)
+			meterUsage.POST("/properties/values", handlers.MeterUsage.GetPropertyValues)
 		}
 
 		// Analytics query + view endpoints
@@ -242,6 +244,10 @@ func NewRouter(
 			analytics.POST("/query", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.Query)
 			analytics.POST("/revenue", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.GetRevenueAnalytics)
 			analytics.POST("/views", write(types.EntityAnalytics, types.ActionWrite), handlers.Analytics.CreateView)
+			analytics.GET("/views", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.ListViews)
+			analytics.GET("/views/:id", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.GetView)
+			analytics.PUT("/views/:id", write(types.EntityAnalytics, types.ActionWrite), handlers.Analytics.UpdateView)
+			analytics.DELETE("/views/:id", write(types.EntityAnalytics, types.ActionWrite), handlers.Analytics.DeleteView)
 			analytics.POST("/views/:id/query", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.QueryView)
 			analytics.GET("/reports", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.ListReports)
 			analytics.POST("/reports/:key/query", read(types.EntityAnalytics, types.ActionRead), handlers.Analytics.RunReport)
@@ -782,6 +788,8 @@ func NewRouter(
 
 		// Analytics
 		customerPortalAPI.POST("/analytics/revenue", handlers.CustomerPortal.GetAnalytics)
+		customerPortalAPI.POST("/analytics/properties", handlers.CustomerPortal.GetPropertyKeys)
+		customerPortalAPI.POST("/analytics/properties/values", handlers.CustomerPortal.GetPropertyValues)
 
 		// Cost Analytics
 		customerPortalAPI.POST("/analytics/cost", handlers.CustomerPortal.GetCostAnalytics)
