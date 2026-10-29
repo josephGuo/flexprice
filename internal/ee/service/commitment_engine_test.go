@@ -425,8 +425,10 @@ func invoiceLine(id string, quantity, cost string, usage ...string) *usageLine {
 // committed builds a commitment stacked over the given lines with one pool per capacity.
 func committed(id string, binding bool, periodAmount string, poolOf []int, lines []*usageLine, capacities ...string) *stackedCommitment {
 	pools := make([]capacityPool, len(capacities))
+	capacity := decimal.Zero
 	for i, c := range capacities {
 		pools[i] = capacityPool{Capacity: dec(c)}
+		capacity = capacity.Add(dec(c))
 	}
 
 	return &stackedCommitment{
@@ -438,7 +440,7 @@ func committed(id string, binding bool, periodAmount string, poolOf []int, lines
 			CommittedPriceID:   lo.ToPtr("committed_price_" + id),
 		},
 		CommittedPrice: &price.Price{ID: "committed_price_" + id, BillingModel: types.BILLING_MODEL_FLAT_FEE, Amount: intDec(1)},
-		Period:         commitmentPeriod{Amount: dec(periodAmount)},
+		Period:         commitmentPeriod{Amount: dec(periodAmount), Capacity: capacity},
 		Lines:          lines,
 		Pools:          pools,
 		PoolOf:         poolOf,
@@ -833,6 +835,29 @@ func TestCommitmentInvoiceLines(t *testing.T) {
 	}
 }
 
+// A mid-period preview accrues pool capacity only to asOf, while the floor spans the whole period.
+// The true-up line's quantity must follow the span, like its amount, not the as-of allocation.
+func TestCommitmentInvoiceLinesTrueUpQuantitySpansThePeriodOnPreviews(t *testing.T) {
+	line := invoiceLine("a", "16", "0", "16")
+	sc := committed("c1", true, "372", []int{0}, []*usageLine{line}, "100")
+	sc.CommittedPrice.Amount = dec("1.5")
+	sc.Period.Capacity = dec("248")
+	stack := &commitmentStack{
+		Type:        types.COMMITMENT_TYPE_QUANTITY,
+		Measurement: types.CommitmentMeasurementWindow,
+		Windows:     engineWindows(1),
+		Lines:       []*usageLine{line},
+		Commitments: []*stackedCommitment{sc},
+	}
+
+	flatCost := func(p *price.Price, qty decimal.Decimal) decimal.Decimal { return qty.Mul(p.Amount) }
+	got := renderStack(t, stack, flatCost)
+	requireLines(t, []wantLine{
+		{types.CommitmentLineUtilized, "Label c1", "16", "24"},
+		{types.CommitmentLineTrueUp, "Label c1 (unused)", "232", "348"},
+	}, got)
+}
+
 func TestCommitmentInvoiceLinesFields(t *testing.T) {
 	line := invoiceLine("a", "130", "0", "130")
 	stack := &commitmentStack{
@@ -954,9 +979,9 @@ func partialHalves(t *testing.T, binding bool, used ...string) [][]dto.CreateInv
 		Measurement: types.CommitmentMeasurementBillingPeriod,
 		Timezone:    "UTC",
 		StartDate:   apr,
-		EndDate:     may,
+		EndDate:     lo.ToPtr(may),
 	}
-	periods, err := commitmentPeriods(c, monthlySub(apr), amountOf, "")
+	periods, err := commitmentPeriods(c, monthlySub(apr), amountOf, "", apr, may)
 	require.NoError(t, err)
 	require.Len(t, periods, 1)
 
