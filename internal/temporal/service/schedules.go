@@ -102,6 +102,13 @@ func AllTemporalScheduleConfigs() []types.ScheduleConfig {
 			TaskQueue: types.TemporalTaskQueueCron,
 		},
 		{
+			ID:        types.ScheduleIDRazorpayPaymentStatusSync,
+			Interval:  time.Hour,
+			Workflow:  cronWorkflows.RazorpayPaymentStatusSyncWorkflow,
+			Input:     struct{}{},
+			TaskQueue: types.TemporalTaskQueueCron,
+		},
+		{
 			ID:        types.ScheduleIDCheckoutSessionExpiry,
 			Interval:  30 * time.Minute,
 			Workflow:  cronWorkflows.CheckoutSessionExpiryWorkflow,
@@ -173,6 +180,14 @@ func AllTemporalScheduleConfigs() []types.ScheduleConfig {
 			Interval:  15 * time.Minute,
 			Workflow:  cronWorkflows.BillingInstalmentsDueWorkflow,
 			Input:     models.BillingInstalmentsDueWorkflowInput{},
+			TaskQueue: types.TemporalTaskQueueCron,
+		},
+		{
+			// Always declared; a no-op unless customer emails are on (email.enabled and email.provider).
+			ID:        types.ScheduleIDEmailDispatch,
+			Interval:  1 * time.Minute,
+			Workflow:  cronWorkflows.EmailDispatchWorkflow,
+			Input:     models.EmailDispatchWorkflowInput{},
 			TaskQueue: types.TemporalTaskQueueCron,
 		},
 	}

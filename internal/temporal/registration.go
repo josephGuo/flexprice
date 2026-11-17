@@ -63,6 +63,7 @@ type cronActivityBundle struct {
 	webhookOutboundRetry         *cronActivities.WebhookOutboundRetryActivities
 	paddleInvoicePullSync        *cronActivities.PaddleInvoicePullSyncActivities
 	moyasarAuthPaymentSettlement *cronActivities.MoyasarAuthPaymentSettlementActivities
+	razorpayPaymentStatusSync    *cronActivities.RazorpayPaymentStatusSyncActivities
 	checkoutSessionExpiry        *cronActivities.CheckoutSessionExpiryActivities
 	marketplaceSnapshot          *marketplaceActivities.SnapshotActivities
 	marketplaceReport            *marketplaceActivities.ReportActivities
@@ -71,6 +72,7 @@ type cronActivityBundle struct {
 	revenueRecognition           *cronActivities.RevenueRecognitionActivities
 	selfBillingHourly            *cronActivities.SelfBillingHourlyActivities
 	commitment                   *cronActivities.CommitmentCronActivities
+	emailDispatch                *cronActivities.EmailDispatchActivities
 }
 
 // RegisterWorkflowsAndActivities registers all workflows and activities with the temporal service
@@ -349,6 +351,7 @@ func RegisterWorkflowsAndActivities(
 		webhookOutboundRetry:         cronActivities.NewWebhookOutboundRetryActivities(webhookService, params.Logger),
 		paddleInvoicePullSync:        cronActivities.NewPaddleInvoicePullSyncActivities(params.InvoiceRepo, temporalService, params.Logger),
 		moyasarAuthPaymentSettlement: cronActivities.NewMoyasarAuthPaymentSettlementActivities(params.IntegrationFactory, params.PaymentRepo, entityScope, params.Logger),
+		razorpayPaymentStatusSync:    cronActivities.NewRazorpayPaymentStatusSyncActivities(params.PaymentRepo, service.NewPaymentService(params), params.Logger),
 		checkoutSessionExpiry:        cronActivities.NewCheckoutSessionExpiryActivities(service.NewCheckoutSessionService(params), params.Logger),
 		marketplaceSnapshot:          marketplaceSnapshotActivities,
 		marketplaceReport:            marketplaceReportActivities,
@@ -357,6 +360,7 @@ func RegisterWorkflowsAndActivities(
 		revenueRecognition:           cronActivities.NewRevenueRecognitionActivities(params.JournalService, params.Logger),
 		selfBillingHourly:            cronActivities.NewSelfBillingHourlyActivities(selfbilling.New(params), params.Logger),
 		commitment:                   cronActivities.NewCommitmentCronActivities(service.NewCommitmentService(params), params.Logger),
+		emailDispatch:                cronActivities.NewEmailDispatchActivities(service.NewEmailNotificationService(params), params.Logger),
 	}
 
 	// Get all task queues and register workflows/activities for each
@@ -605,6 +609,7 @@ func buildWorkerConfig(
 			cronWorkflows.AutoInvoiceThresholdBillingWorkflow,
 			cronWorkflows.PaddleInvoicePullSyncCronWorkflow,
 			cronWorkflows.MoyasarAuthPaymentSettlementWorkflow,
+			cronWorkflows.RazorpayPaymentStatusSyncWorkflow,
 			cronWorkflows.CheckoutSessionExpiryWorkflow,
 			cronWorkflows.MarketplaceUsageSnapshotWorkflow,
 			cronWorkflows.MarketplaceUsageReportWorkflow,
@@ -614,6 +619,7 @@ func buildWorkerConfig(
 			cronWorkflows.RevenueRecognitionBackfillWorkflow,
 			cronWorkflows.SelfBillingHourlyWorkflow,
 			cronWorkflows.BillingInstalmentsDueWorkflow,
+			cronWorkflows.EmailDispatchWorkflow,
 		)
 		activitiesList = append(activitiesList,
 			cron.creditGrant.ProcessScheduledCreditGrantApplicationsActivity,
@@ -628,6 +634,7 @@ func buildWorkerConfig(
 			cron.paddleInvoicePullSync.FetchAndTriggerPaddleInvoicePullSyncActivity,
 			cron.moyasarAuthPaymentSettlement.ReconcilePendingAuthPaymentsActivity,
 			cron.moyasarAuthPaymentSettlement.VoidOrRefundSucceededAuthPaymentsActivity,
+			cron.razorpayPaymentStatusSync.SyncRazorpayInFlightPaymentsActivity,
 			cron.checkoutSessionExpiry.ExpireCheckoutSessionsActivity,
 			cron.marketplaceSnapshot.MarketplaceUsageSnapshotActivity,
 			cron.marketplaceReport.MarketplaceUsageReportActivity,
@@ -638,6 +645,7 @@ func buildWorkerConfig(
 			cron.revenueRecognition.BackfillRevenueActivity,
 			cron.selfBillingHourly.SelfBillingHourlyActivity,
 			cron.commitment.BillDueInstalmentsActivity,
+			cron.emailDispatch.DispatchEmailsActivity,
 		)
 
 	case types.TemporalTaskQueueBilling:
