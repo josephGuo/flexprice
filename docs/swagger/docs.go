@@ -15659,7 +15659,7 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
-                        "type": "number",
+                        "type": "string",
                         "name": "credits_available_gt",
                         "in": "query"
                     },
@@ -22677,7 +22677,6 @@ const docTemplate = `{
         "CreatePaymentRequest": {
             "type": "object",
             "required": [
-                "amount",
                 "currency",
                 "destination_id",
                 "destination_type",
@@ -22685,6 +22684,7 @@ const docTemplate = `{
             ],
             "properties": {
                 "amount": {
+                    "description": "Amount defaults to the invoice's amount remaining for invoice payments when zero or omitted.",
                     "type": "string"
                 },
                 "cancel_url": {
@@ -23065,7 +23065,7 @@ const docTemplate = `{
             "properties": {
                 "commitment_amount": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_duration": {
                     "description": "Deprecated: use POST /commitments instead.",
@@ -23077,11 +23077,11 @@ const docTemplate = `{
                 },
                 "commitment_overage_factor": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_quantity": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_time_buckets": {
                     "description": "Deprecated: use POST /commitments instead.",
@@ -23139,7 +23139,7 @@ const docTemplate = `{
                     ]
                 },
                 "quantity": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "start_date": {
                     "type": "string"
@@ -25437,7 +25437,7 @@ const docTemplate = `{
                     }
                 },
                 "instalments": {
-                    "description": "Instalments lists, with expand \"instalments\", the instalments of the v2 commitments covering a queried meter that\nwere invoiced in the range, or are still scheduled with a bill_on in it; it is empty with property or source\nfilters, or when no usage line runs in the range.",
+                    "description": "Instalments lists the commitment instalments in the range with expand \"instalments\": start \u003c= bill_on \u003c end,\nor start \u003c bill_on \u003c= end for an ARREAR one.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/UsageAnalyticInstalment"
@@ -26574,6 +26574,13 @@ const docTemplate = `{
                         "$ref": "#/definitions/InvoiceLineItemResponse"
                     }
                 },
+                "linked_wallet_transactions": {
+                    "description": "linked_wallet_transactions are the wallet credits this invoice pays for; pending ones are released when it is paid",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/LinkedWalletTransaction"
+                    }
+                },
                 "metadata": {
                     "description": "metadata contains custom key-value pairs for storing additional information about this invoice",
                     "allOf": [
@@ -26794,7 +26801,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "commitment_amount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_duration": {
                     "description": "CommitmentDuration allows a different period than billing (e.g. ANNUAL commitment on MONTHLY billing).",
@@ -26805,7 +26812,7 @@ const docTemplate = `{
                     ]
                 },
                 "commitment_quantity": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_time_buckets": {
                     "description": "CommitmentTimeBuckets scopes commitment to specific UTC-hour windows; requires IsWindowCommitment=true.",
@@ -26827,7 +26834,7 @@ const docTemplate = `{
                 },
                 "overage_factor": {
                     "description": "OverageFactor is a multiplier on usage beyond commitment; 1.0 = base rate.",
-                    "type": "number"
+                    "type": "string"
                 }
             }
         },
@@ -26884,6 +26891,26 @@ const docTemplate = `{
             "properties": {
                 "mapping": {
                     "$ref": "#/definitions/EntityIntegrationMappingResponse"
+                }
+            }
+        },
+        "LinkedWalletTransaction": {
+            "type": "object",
+            "properties": {
+                "credit_amount": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "transaction_reason": {
+                    "$ref": "#/definitions/types.TransactionReason"
+                },
+                "transaction_status": {
+                    "$ref": "#/definitions/types.TransactionStatus"
+                },
+                "wallet_id": {
+                    "type": "string"
                 }
             }
         },
@@ -28853,17 +28880,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "billable_qty": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "day": {
                     "description": "Day is set for day granularity; PeriodStart/PeriodEnd for period.",
                     "type": "string"
                 },
                 "entitlement_amount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "entitlement_qty": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "group": {
                     "description": "Group holds the requested dimensions and their values for this bucket.",
@@ -28873,13 +28900,13 @@ const docTemplate = `{
                     }
                 },
                 "invoice_discount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "line_discount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "net_amount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "period_end": {
                     "type": "string"
@@ -28896,10 +28923,10 @@ const docTemplate = `{
                     ]
                 },
                 "tier_delta": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "usage_at_list_rate": {
-                    "type": "number"
+                    "type": "string"
                 }
             }
         },
@@ -29582,6 +29609,10 @@ const docTemplate = `{
         "StripePaymentGatewayOptions": {
             "type": "object",
             "properties": {
+                "allow_promotion_codes": {
+                    "description": "AllowPromotionCodes lets the customer enter a promotion code; nil keeps it on.",
+                    "type": "boolean"
+                },
                 "tax_id_collection_enabled": {
                     "description": "TaxIDCollectionEnabled only applies to PAYMENT_LINK Checkout Sessions.",
                     "type": "boolean"
@@ -32783,7 +32814,7 @@ const docTemplate = `{
                 },
                 "commitment_amount": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_duration": {
                     "description": "Deprecated: use POST /commitments instead.",
@@ -32795,11 +32826,11 @@ const docTemplate = `{
                 },
                 "commitment_overage_factor": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_quantity": {
                     "description": "Deprecated: use POST /commitments instead.",
-                    "type": "number"
+                    "type": "string"
                 },
                 "commitment_time_buckets": {
                     "description": "Pointer so an explicit empty array can clear existing buckets (omission keeps them).\n\nDeprecated: use POST /commitments instead.",
@@ -33137,10 +33168,13 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "instalment_status": {
-                    "description": "InstalmentStatus is invoiced, or scheduled for an instalment due in the range that no invoice has billed yet.",
+                    "$ref": "#/definitions/types.InstalmentStatus"
+                },
+                "invoice_cadence": {
+                    "description": "InvoiceCadence is the recurring term's cadence; empty for once terms, settlements and fees.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/types.InstalmentStatus"
+                            "$ref": "#/definitions/types.InvoiceCadence"
                         }
                     ]
                 },
@@ -33435,7 +33469,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "amount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "created_at": {
                     "type": "string"
@@ -33468,7 +33502,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "quantity": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "status": {
                     "$ref": "#/definitions/types.Status"
@@ -34523,6 +34557,31 @@ const docTemplate = `{
                 }
             }
         },
+        "types.AccountingPeriodStatus": {
+            "type": "string",
+            "enum": [
+                "open",
+                "closed"
+            ],
+            "x-enum-comments": {
+                "AccountingPeriodStatusClosed": "reserved; close is deferred"
+            },
+            "x-enum-varnames": [
+                "AccountingPeriodStatusOpen",
+                "AccountingPeriodStatusClosed"
+            ]
+        },
+        "types.ActiveWindow": {
+            "type": "object",
+            "properties": {
+                "end": {
+                    "$ref": "#/definitions/types.Bucket"
+                },
+                "start": {
+                    "$ref": "#/definitions/types.Bucket"
+                }
+            }
+        },
         "types.AddAddonParams": {
             "type": "object",
             "properties": {
@@ -34578,6 +34637,22 @@ const docTemplate = `{
                 },
                 "start_date": {
                     "type": "string"
+                }
+            }
+        },
+        "types.AddPaymentMethodOptions": {
+            "type": "object",
+            "properties": {
+                "payment_method_types": {
+                    "description": "PaymentMethodTypes are the methods it sets up, e.g. [\"enach\"] for Razorpay.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "sets_default": {
+                    "description": "SetsDefault reports whether it can make the saved method the default (Stripe only).",
+                    "type": "boolean"
                 }
             }
         },
@@ -34660,6 +34735,20 @@ const docTemplate = `{
                 },
                 "status": {
                     "$ref": "#/definitions/types.Status"
+                }
+            }
+        },
+        "types.AddonPriceOverrideRef": {
+            "type": "object",
+            "properties": {
+                "override_price_id": {
+                    "type": "string"
+                },
+                "price_id": {
+                    "type": "string"
+                },
+                "quantity": {
+                    "type": "string"
                 }
             }
         },
@@ -34960,6 +35049,19 @@ const docTemplate = `{
                 "AlertTypeEntitlementGrantExhausted"
             ]
         },
+        "types.AmortizationMethod": {
+            "type": "string",
+            "enum": [
+                "daily",
+                "period_even",
+                "period_even_prorated"
+            ],
+            "x-enum-varnames": [
+                "AmortizationDaily",
+                "AmortizationPeriodEven",
+                "AmortizationPeriodEvenProrated"
+            ]
+        },
         "types.ApplicationStatus": {
             "type": "string",
             "enum": [
@@ -34981,7 +35083,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "amount": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "cooldown": {
                     "description": "Cooldown is an optional cooloff after a successful auto top-up before another may run.",
@@ -34998,7 +35100,30 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "threshold": {
-                    "type": "number"
+                    "type": "string"
+                }
+            }
+        },
+        "types.BillingAddress": {
+            "type": "object",
+            "properties": {
+                "address_city": {
+                    "type": "string"
+                },
+                "address_country": {
+                    "type": "string"
+                },
+                "address_line1": {
+                    "type": "string"
+                },
+                "address_line2": {
+                    "type": "string"
+                },
+                "address_postal_code": {
+                    "type": "string"
+                },
+                "address_state": {
+                    "type": "string"
                 }
             }
         },
@@ -35020,6 +35145,36 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "BillingCycleAnniversary",
                 "BillingCycleCalendar"
+            ]
+        },
+        "types.BillingDetails": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "$ref": "#/definitions/types.BillingAddress"
+                },
+                "email": {
+                    "type": "string"
+                },
+                "help_email": {
+                    "type": "string"
+                },
+                "phone": {
+                    "type": "string"
+                }
+            }
+        },
+        "types.BillingEntityMode": {
+            "type": "string",
+            "enum": [
+                "off",
+                "enabling",
+                "enabled"
+            ],
+            "x-enum-varnames": [
+                "BillingEntityModeOff",
+                "BillingEntityModeEnabling",
+                "BillingEntityModeEnabled"
             ]
         },
         "types.BillingModel": {
@@ -35069,6 +35224,51 @@ const docTemplate = `{
                 "BillingPeriodBehaviourAnchorAtConfig"
             ]
         },
+        "types.BillingTermKind": {
+            "type": "string",
+            "enum": [
+                "once",
+                "recurring"
+            ],
+            "x-enum-varnames": [
+                "BillingTermKindOnce",
+                "BillingTermKindRecurring"
+            ]
+        },
+        "types.BillingTermOwnerType": {
+            "type": "string",
+            "enum": [
+                "commitment"
+            ],
+            "x-enum-varnames": [
+                "BillingTermOwnerCommitment"
+            ]
+        },
+        "types.BillingTermSplit": {
+            "type": "string",
+            "enum": [
+                "even",
+                "proportional"
+            ],
+            "x-enum-varnames": [
+                "BillingTermSplitEven",
+                "BillingTermSplitProportional"
+            ]
+        },
+        "types.BillingTermValueType": {
+            "description": "fixed or remainder; percentage is reserved and rejected as not supported yet",
+            "type": "string",
+            "enum": [
+                "fixed",
+                "percentage",
+                "remainder"
+            ],
+            "x-enum-varnames": [
+                "BillingTermValueFixed",
+                "BillingTermValuePercentage",
+                "BillingTermValueRemainder"
+            ]
+        },
         "types.BillingTier": {
             "type": "string",
             "enum": [
@@ -35104,6 +35304,18 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "CancelImmediatelyInvoicePolicyGenerateInvoice",
                 "CancelImmediatelyInvoicePolicySkip"
+            ]
+        },
+        "types.CancellationFeeType": {
+            "description": "fixed; percentage is reserved and rejected as not supported yet",
+            "type": "string",
+            "enum": [
+                "fixed",
+                "percentage"
+            ],
+            "x-enum-varnames": [
+                "CancellationFeeFixed",
+                "CancellationFeePercentage"
             ]
         },
         "types.CancellationType": {
@@ -35185,6 +35397,14 @@ const docTemplate = `{
                     "description": "CustomerNotPresent is the unattended/MIT opt-in. Zero value (omitted) means\nthe customer is present, so a missed auto-charge may fall back to a hosted\nauthorization link. Set true only from merchant-initiated paths (auto top-up).",
                     "type": "boolean"
                 },
+                "link_expiry": {
+                    "description": "LinkExpiry overrides how long the hosted payment page stays payable; nil keeps the provider default.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/types.Duration"
+                        }
+                    ]
+                },
                 "max_mandate_limit": {
                     "type": "string"
                 },
@@ -35249,6 +35469,30 @@ const docTemplate = `{
                 "ColumnTypeDatetime"
             ]
         },
+        "types.CommitmentCollectionMethod": {
+            "type": "string",
+            "enum": [
+                "per_period",
+                "billing_terms"
+            ],
+            "x-enum-varnames": [
+                "CommitmentCollectionPerPeriod",
+                "CommitmentCollectionBillingTerms"
+            ]
+        },
+        "types.CommitmentEarlyTermination": {
+            "type": "string",
+            "enum": [
+                "forfeit",
+                "credit_note",
+                "bill_remaining"
+            ],
+            "x-enum-varnames": [
+                "CommitmentTerminationForfeit",
+                "CommitmentTerminationCreditNote",
+                "CommitmentTerminationBillRemaining"
+            ]
+        },
         "types.CommitmentInfo": {
             "type": "object",
             "properties": {
@@ -35297,6 +35541,45 @@ const docTemplate = `{
                 }
             }
         },
+        "types.CommitmentMeasurement": {
+            "type": "string",
+            "enum": [
+                "billing_period",
+                "window"
+            ],
+            "x-enum-varnames": [
+                "CommitmentMeasurementBillingPeriod",
+                "CommitmentMeasurementWindow"
+            ]
+        },
+        "types.CommitmentScopeType": {
+            "type": "string",
+            "enum": [
+                "subscription",
+                "group",
+                "meter",
+                "price"
+            ],
+            "x-enum-varnames": [
+                "CommitmentScopeSubscription",
+                "CommitmentScopeGroup",
+                "CommitmentScopeMeter",
+                "CommitmentScopePrice"
+            ]
+        },
+        "types.CommitmentStatus": {
+            "type": "string",
+            "enum": [
+                "active",
+                "ended",
+                "terminated"
+            ],
+            "x-enum-varnames": [
+                "CommitmentStatusActive",
+                "CommitmentStatusEnded",
+                "CommitmentStatusTerminated"
+            ]
+        },
         "types.CommitmentType": {
             "type": "string",
             "enum": [
@@ -35306,6 +35589,21 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "COMMITMENT_TYPE_AMOUNT",
                 "COMMITMENT_TYPE_QUANTITY"
+            ]
+        },
+        "types.ContractStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "active",
+                "ended",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "ContractStatusDraft",
+                "ContractStatusActive",
+                "ContractStatusEnded",
+                "ContractStatusCancelled"
             ]
         },
         "types.CouponCadence": {
@@ -35764,6 +36062,125 @@ const docTemplate = `{
                 "DurationUnitDay"
             ]
         },
+        "types.EmailDeliveryStatus": {
+            "type": "string",
+            "enum": [
+                "queued",
+                "sent",
+                "delivery_delayed",
+                "delivered",
+                "bounced",
+                "complained",
+                "failed",
+                "suppressed",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "EmailDeliveryStatusQueued",
+                "EmailDeliveryStatusSent",
+                "EmailDeliveryStatusDeliveryDelayed",
+                "EmailDeliveryStatusDelivered",
+                "EmailDeliveryStatusBounced",
+                "EmailDeliveryStatusComplained",
+                "EmailDeliveryStatusFailed",
+                "EmailDeliveryStatusSuppressed",
+                "EmailDeliveryStatusSkipped"
+            ]
+        },
+        "types.EmailLogFilter": {
+            "type": "object",
+            "properties": {
+                "customer_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "delivery_statuses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/types.EmailDeliveryStatus"
+                    }
+                },
+                "end_time": {
+                    "type": "string"
+                },
+                "entity_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "entity_type": {
+                    "$ref": "#/definitions/types.SystemEntityType"
+                },
+                "expand": {
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer",
+                    "maximum": 1000,
+                    "minimum": 1
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "order": {
+                    "type": "string",
+                    "enum": [
+                        "asc",
+                        "desc"
+                    ]
+                },
+                "sort": {
+                    "type": "string"
+                },
+                "start_time": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/types.Status"
+                },
+                "triggers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/types.EmailTrigger"
+                    }
+                }
+            }
+        },
+        "types.EmailProvider": {
+            "type": "string",
+            "enum": [
+                "resend",
+                "local"
+            ],
+            "x-enum-varnames": [
+                "EmailProviderResend",
+                "EmailProviderLocal"
+            ]
+        },
+        "types.EmailTemplateKey": {
+            "type": "string",
+            "enum": [
+                "invoice_finalized"
+            ],
+            "x-enum-varnames": [
+                "EmailTemplateInvoiceFinalized"
+            ]
+        },
+        "types.EmailTrigger": {
+            "type": "string",
+            "enum": [
+                "auto",
+                "manual"
+            ],
+            "x-enum-varnames": [
+                "EmailTriggerAuto",
+                "EmailTriggerManual"
+            ]
+        },
         "types.EntitlementAggregationMode": {
             "type": "string",
             "enum": [
@@ -35907,6 +36324,19 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "EntitlementGrantMeasureQuantity",
                 "EntitlementGrantMeasureAmount"
+            ]
+        },
+        "types.EntitlementGrantScopeEntityType": {
+            "type": "string",
+            "enum": [
+                "feature",
+                "subscription",
+                "group"
+            ],
+            "x-enum-varnames": [
+                "EntitlementGrantScopeFeature",
+                "EntitlementGrantScopeSubscription",
+                "EntitlementGrantScopeGroup"
             ]
         },
         "types.EntitlementGrantStatus": {
@@ -36544,6 +36974,90 @@ const docTemplate = `{
                 }
             }
         },
+        "types.ImprovementDirection": {
+            "type": "string",
+            "enum": [
+                "higher",
+                "lower"
+            ],
+            "x-enum-varnames": [
+                "ImprovementHigher",
+                "ImprovementLower"
+            ]
+        },
+        "types.InstalmentBillTrigger": {
+            "type": "string",
+            "enum": [
+                "date",
+                "manual"
+            ],
+            "x-enum-varnames": [
+                "InstalmentBillTriggerDate",
+                "InstalmentBillTriggerManual"
+            ]
+        },
+        "types.InstalmentDelivery": {
+            "type": "string",
+            "enum": [
+                "subscription_invoice",
+                "separate_invoice"
+            ],
+            "x-enum-varnames": [
+                "InstalmentDeliverySubscriptionInvoice",
+                "InstalmentDeliverySeparateInvoice"
+            ]
+        },
+        "types.InstalmentKind": {
+            "type": "string",
+            "enum": [
+                "instalment",
+                "settlement",
+                "cancellation_fee"
+            ],
+            "x-enum-varnames": [
+                "InstalmentKindInstalment",
+                "InstalmentKindSettlement",
+                "InstalmentKindCancellationFee"
+            ]
+        },
+        "types.InstalmentStatus": {
+            "type": "string",
+            "enum": [
+                "scheduled",
+                "invoiced",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "InstalmentStatusScheduled",
+                "InstalmentStatusInvoiced",
+                "InstalmentStatusCancelled"
+            ]
+        },
+        "types.IntegrationCapabilityType": {
+            "type": "string",
+            "enum": [
+                "checkout",
+                "auto_charge",
+                "set_default_method",
+                "payment_link",
+                "payment_method_management",
+                "invoice_sync",
+                "list_payment_methods",
+                "add_payment_method",
+                "delete_payment_method"
+            ],
+            "x-enum-varnames": [
+                "IntegrationCapabilityCheckout",
+                "IntegrationCapabilityAutoCharge",
+                "IntegrationCapabilitySetDefaultMethod",
+                "IntegrationCapabilityPaymentLink",
+                "IntegrationCapabilityPaymentMethodManagement",
+                "IntegrationCapabilityInvoiceSync",
+                "IntegrationCapabilityListPaymentMethods",
+                "IntegrationCapabilityAddPaymentMethod",
+                "IntegrationCapabilityDeletePaymentMethod"
+            ]
+        },
         "types.IntegrationEntityType": {
             "type": "string",
             "enum": [
@@ -36576,6 +37090,20 @@ const docTemplate = `{
                 "IntegrationEntityTypeSubscriptionLineItem",
                 "IntegrationEntityTypePaymentMethodSetup"
             ]
+        },
+        "types.InvoiceBillingEntity": {
+            "type": "object",
+            "properties": {
+                "billing_details": {
+                    "$ref": "#/definitions/types.BillingDetails"
+                },
+                "billing_entity_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
         },
         "types.InvoiceBillingReason": {
             "type": "string",
@@ -36626,11 +37154,11 @@ const docTemplate = `{
             "properties": {
                 "amount_due_gt": {
                     "description": "amount_due_gt filters invoices with a total amount due greater than the specified value\nUseful for finding invoices above a certain threshold or identifying high-value invoices",
-                    "type": "number"
+                    "type": "string"
                 },
                 "amount_remaining_gt": {
                     "description": "amount_remaining_gt filters invoices with an outstanding balance greater than the specified value\nUseful for finding invoices that still have significant unpaid amounts",
-                    "type": "number"
+                    "type": "string"
                 },
                 "billing_entity_id": {
                     "description": "billing_entity_id filters by the customer's billing entity",
@@ -36778,6 +37306,19 @@ const docTemplate = `{
                 }
             }
         },
+        "types.InvoicePaymentFailureReason": {
+            "type": "string",
+            "enum": [
+                "payment_method_unavailable",
+                "provider_error",
+                "declined"
+            ],
+            "x-enum-varnames": [
+                "InvoicePaymentFailureReasonPaymentMethodUnavailable",
+                "InvoicePaymentFailureReasonProviderError",
+                "InvoicePaymentFailureReasonDeclined"
+            ]
+        },
         "types.InvoiceSourceType": {
             "type": "string",
             "enum": [
@@ -36805,6 +37346,10 @@ const docTemplate = `{
         "types.InvoiceSyncSettings": {
             "type": "object",
             "properties": {
+                "auto_advance": {
+                    "description": "Nil lets the sync decide from the collection method and saved payment method.",
+                    "type": "boolean"
+                },
                 "deposit_to_account_id": {
                     "description": "Zoho chart-of-accounts id (\"Deposit To\"). Empty omits account_id, leaving Zoho's\nUndeposited Funds default.a",
                     "type": "string"
@@ -36843,6 +37388,10 @@ const docTemplate = `{
                     "description": "Zoho payment modes are merchant-editable free strings with no id, so this is passed\nthrough verbatim. Empty means DefaultZohoPaymentMode.",
                     "type": "string"
                 },
+                "send_invoice_email": {
+                    "description": "Nil sends Stripe's invoice email for send_invoice invoices.",
+                    "type": "boolean"
+                },
                 "service_period_custom_fields": {
                     "description": "Zoho custom fields that receive the invoice's service start and end dates.",
                     "allOf": [
@@ -36868,6 +37417,65 @@ const docTemplate = `{
                 "InvoiceTypeSubscription",
                 "InvoiceTypeOneOff",
                 "InvoiceTypeCredit"
+            ]
+        },
+        "types.JournalDirection": {
+            "type": "string",
+            "enum": [
+                "debit",
+                "credit"
+            ],
+            "x-enum-varnames": [
+                "JournalDirectionDebit",
+                "JournalDirectionCredit"
+            ]
+        },
+        "types.JournalEventType": {
+            "type": "string",
+            "enum": [
+                "invoice_finalized",
+                "invoice_voided",
+                "credit_note_finalized",
+                "credit_note_voided",
+                "payment_succeeded",
+                "payment_reversed",
+                "refund_succeeded",
+                "revenue_earned",
+                "revenue_offset"
+            ],
+            "x-enum-varnames": [
+                "JournalEventInvoiceFinalized",
+                "JournalEventInvoiceVoided",
+                "JournalEventCreditNoteFinalized",
+                "JournalEventCreditNoteVoided",
+                "JournalEventPaymentSucceeded",
+                "JournalEventPaymentReversed",
+                "JournalEventRefundSucceeded",
+                "JournalEventRevenueEarned",
+                "JournalEventRevenueOffset"
+            ]
+        },
+        "types.LedgerAccountKey": {
+            "type": "string",
+            "enum": [
+                "cash",
+                "accounts_receivable",
+                "unbilled_receivable",
+                "deferred_revenue",
+                "customer_credit",
+                "tax_payable",
+                "revenue",
+                "contra_revenue"
+            ],
+            "x-enum-varnames": [
+                "LedgerAccountCash",
+                "LedgerAccountReceivable",
+                "LedgerAccountUnbilledReceivable",
+                "LedgerAccountDeferredRevenue",
+                "LedgerAccountCustomerCredit",
+                "LedgerAccountTaxPayable",
+                "LedgerAccountRevenue",
+                "LedgerAccountContraRevenue"
             ]
         },
         "types.LineItemGrouping": {
@@ -37228,6 +37836,21 @@ const docTemplate = `{
                 "PaymentTermsEndOfNextMonth"
             ]
         },
+        "types.PerformanceObligationStatus": {
+            "type": "string",
+            "enum": [
+                "draft",
+                "active",
+                "satisfied",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "PerformanceObligationStatusDraft",
+                "PerformanceObligationStatusActive",
+                "PerformanceObligationStatusSatisfied",
+                "PerformanceObligationStatusCancelled"
+            ]
+        },
         "types.PlanFilter": {
             "type": "object",
             "properties": {
@@ -37525,6 +38148,19 @@ const docTemplate = `{
                 }
             }
         },
+        "types.RecognitionMethod": {
+            "type": "string",
+            "enum": [
+                "point_in_time",
+                "straight_line",
+                "as_consumed"
+            ],
+            "x-enum-varnames": [
+                "RecognitionMethodPointInTime",
+                "RecognitionMethodStraightLine",
+                "RecognitionMethodAsConsumed"
+            ]
+        },
         "types.RecurringPaymentStatus": {
             "type": "string",
             "enum": [
@@ -37634,12 +38270,55 @@ const docTemplate = `{
                 }
             }
         },
+        "types.ReportCategory": {
+            "type": "string",
+            "enum": [
+                "billing",
+                "receivables",
+                "customers",
+                "credits",
+                "usage"
+            ],
+            "x-enum-varnames": [
+                "ReportCategoryBilling",
+                "ReportCategoryReceivables",
+                "ReportCategoryCustomers",
+                "ReportCategoryCredits",
+                "ReportCategoryUsage"
+            ]
+        },
+        "types.ReportKind": {
+            "type": "string",
+            "enum": [
+                "flow",
+                "ratio",
+                "snapshot"
+            ],
+            "x-enum-varnames": [
+                "ReportKindFlow",
+                "ReportKindRatio",
+                "ReportKindSnapshot"
+            ]
+        },
+        "types.ReportValueType": {
+            "type": "string",
+            "enum": [
+                "money",
+                "count",
+                "days"
+            ],
+            "x-enum-varnames": [
+                "ReportValueTypeMoney",
+                "ReportValueTypeCount",
+                "ReportValueTypeDays"
+            ]
+        },
         "types.ReportingUnit": {
             "type": "object",
             "properties": {
                 "conversion_rate": {
                     "description": "Multiplier: reporting_unit_value = unit_value * conversion_rate; must be \u003e 0",
-                    "type": "number"
+                    "type": "string"
                 },
                 "unit_plural": {
                     "description": "Display unit label, plural (e.g. \"seconds\")",
@@ -37675,6 +38354,27 @@ const docTemplate = `{
                 "ResumeModeAuto"
             ]
         },
+        "types.RevRecEntityType": {
+            "type": "string",
+            "enum": [
+                "subscription",
+                "subscription_line_item",
+                "invoice",
+                "credit_note",
+                "payment",
+                "refund",
+                "pob"
+            ],
+            "x-enum-varnames": [
+                "RevRecEntityTypeSubscription",
+                "RevRecEntityTypeSubscriptionLineItem",
+                "RevRecEntityTypeInvoice",
+                "RevRecEntityTypeCreditNote",
+                "RevRecEntityTypePayment",
+                "RevRecEntityTypeRefund",
+                "RevRecEntityTypePOB"
+            ]
+        },
         "types.RevenueAllocationPolicy": {
             "type": "string",
             "enum": [
@@ -37697,6 +38397,19 @@ const docTemplate = `{
                 "RevenueGranularityDay",
                 "RevenueGranularityPeriod",
                 "RevenueGranularityTotal"
+            ]
+        },
+        "types.RevenueReportGroupBy": {
+            "type": "string",
+            "enum": [
+                "customer_id",
+                "contract_id",
+                "pob_id"
+            ],
+            "x-enum-varnames": [
+                "RevenueReportGroupByCustomer",
+                "RevenueReportGroupByContract",
+                "RevenueReportGroupByPOB"
             ]
         },
         "types.RoundType": {
@@ -37932,6 +38645,14 @@ const docTemplate = `{
                 }
             }
         },
+        "types.SettingsOverride": {
+            "type": "object",
+            "properties": {
+                "subscription_config": {
+                    "$ref": "#/definitions/types.SubscriptionConfigOverride"
+                }
+            }
+        },
         "types.Shape": {
             "type": "string",
             "enum": [
@@ -38046,6 +38767,18 @@ const docTemplate = `{
                 "SubscriptionChangeTypeDowngrade",
                 "SubscriptionChangeTypeLateral"
             ]
+        },
+        "types.SubscriptionConfigOverride": {
+            "type": "object",
+            "properties": {
+                "auto_cancellation_enabled": {
+                    "type": "boolean"
+                },
+                "grace_period_days": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
         },
         "types.SubscriptionFilter": {
             "type": "object",
@@ -38422,6 +39155,47 @@ const docTemplate = `{
                 }
             }
         },
+        "types.SystemEntityType": {
+            "type": "string",
+            "enum": [
+                "feature",
+                "customer",
+                "plan",
+                "subscription",
+                "invoice",
+                "payment",
+                "credit_note",
+                "refund",
+                "wallet",
+                "entitlement",
+                "checkout_session",
+                "payment_method",
+                "price",
+                "event",
+                "commitment",
+                "billing_term",
+                "billing_instalment"
+            ],
+            "x-enum-varnames": [
+                "SystemEntityTypeFeature",
+                "SystemEntityTypeCustomer",
+                "SystemEntityTypePlan",
+                "SystemEntityTypeSubscription",
+                "SystemEntityTypeInvoice",
+                "SystemEntityTypePayment",
+                "SystemEntityTypeCreditNote",
+                "SystemEntityTypeRefund",
+                "SystemEntityTypeWallet",
+                "SystemEntityTypeEntitlement",
+                "SystemEntityTypeCheckoutSession",
+                "SystemEntityTypePaymentMethod",
+                "SystemEntityTypePrice",
+                "SystemEntityTypeEvent",
+                "SystemEntityTypeCommitment",
+                "SystemEntityTypeBillingTerm",
+                "SystemEntityTypeBillingInstalment"
+            ]
+        },
         "types.TaskStatus": {
             "type": "string",
             "enum": [
@@ -38600,6 +39374,19 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "TaxTreatmentTaxable",
                 "TaxTreatmentExempt"
+            ]
+        },
+        "types.TenantInternalStatus": {
+            "type": "string",
+            "enum": [
+                "trialing",
+                "active",
+                "suspended"
+            ],
+            "x-enum-varnames": [
+                "TenantInternalStatusTrialing",
+                "TenantInternalStatusActive",
+                "TenantInternalStatusSuspended"
             ]
         },
         "types.TimeOfDayBucket": {
@@ -39017,7 +39804,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "credits_available_gt": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "end_time": {
                     "type": "string"
@@ -39392,6 +40179,60 @@ const docTemplate = `{
                 },
                 "workflow_type": {
                     "type": "string"
+                }
+            }
+        },
+        "types.ZohoPayPalPaymentMethod": {
+            "type": "string",
+            "enum": [
+                "standard",
+                "adaptive"
+            ],
+            "x-enum-varnames": [
+                "ZohoPayPalPaymentMethodStandard",
+                "ZohoPayPalPaymentMethodAdaptive"
+            ]
+        },
+        "types.ZohoPaymentGateway": {
+            "type": "string",
+            "enum": [
+                "paypal",
+                "stripe",
+                "authorize_net",
+                "payflow_pro",
+                "2checkout",
+                "braintree",
+                "razorpay"
+            ],
+            "x-enum-varnames": [
+                "ZohoPaymentGatewayPayPal",
+                "ZohoPaymentGatewayStripe",
+                "ZohoPaymentGatewayAuthorizeNet",
+                "ZohoPaymentGatewayPayflowPro",
+                "ZohoPaymentGateway2Checkout",
+                "ZohoPaymentGatewayBraintree",
+                "ZohoPaymentGatewayRazorpay"
+            ]
+        },
+        "types.ZohoPaymentGatewaySettings": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "gateways": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/types.ZohoPaymentGateway"
+                    }
+                },
+                "paypal_payment_method": {
+                    "description": "Sent as additional_field1 on the PayPal gateway. Required when PayPal is selected.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/types.ZohoPayPalPaymentMethod"
+                        }
+                    ]
                 }
             }
         },
@@ -40392,564 +41233,6 @@ const docTemplate = `{
                 }
             }
         },
-        "types.AccountingPeriodStatus": {
-            "type": "string",
-            "enum": [
-                "open",
-                "closed"
-            ],
-            "x-enum-comments": {
-                "AccountingPeriodStatusClosed": "reserved; close is deferred"
-            },
-            "x-enum-varnames": [
-                "AccountingPeriodStatusOpen",
-                "AccountingPeriodStatusClosed"
-            ]
-        },
-        "types.ActiveWindow": {
-            "type": "object",
-            "properties": {
-                "end": {
-                    "$ref": "#/definitions/types.Bucket"
-                },
-                "start": {
-                    "$ref": "#/definitions/types.Bucket"
-                }
-            }
-        },
-        "types.AddPaymentMethodOptions": {
-            "type": "object",
-            "properties": {
-                "payment_method_types": {
-                    "description": "PaymentMethodTypes are the methods it sets up, e.g. [\"enach\"] for Razorpay.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "sets_default": {
-                    "description": "SetsDefault reports whether it can make the saved method the default (Stripe only).",
-                    "type": "boolean"
-                }
-            }
-        },
-        "types.AddonPriceOverrideRef": {
-            "type": "object",
-            "properties": {
-                "override_price_id": {
-                    "type": "string"
-                },
-                "price_id": {
-                    "type": "string"
-                },
-                "quantity": {
-                    "type": "string"
-                }
-            }
-        },
-        "types.AmortizationMethod": {
-            "type": "string",
-            "enum": [
-                "daily",
-                "period_even",
-                "period_even_prorated"
-            ],
-            "x-enum-varnames": [
-                "AmortizationDaily",
-                "AmortizationPeriodEven",
-                "AmortizationPeriodEvenProrated"
-            ]
-        },
-        "types.BillingAddress": {
-            "type": "object",
-            "properties": {
-                "address_city": {
-                    "type": "string"
-                },
-                "address_country": {
-                    "type": "string"
-                },
-                "address_line1": {
-                    "type": "string"
-                },
-                "address_line2": {
-                    "type": "string"
-                },
-                "address_postal_code": {
-                    "type": "string"
-                },
-                "address_state": {
-                    "type": "string"
-                }
-            }
-        },
-        "types.BillingDetails": {
-            "type": "object",
-            "properties": {
-                "address": {
-                    "$ref": "#/definitions/types.BillingAddress"
-                },
-                "email": {
-                    "type": "string"
-                },
-                "help_email": {
-                    "type": "string"
-                },
-                "phone": {
-                    "type": "string"
-                }
-            }
-        },
-        "types.BillingEntityMode": {
-            "type": "string",
-            "enum": [
-                "off",
-                "enabling",
-                "enabled"
-            ],
-            "x-enum-varnames": [
-                "BillingEntityModeOff",
-                "BillingEntityModeEnabling",
-                "BillingEntityModeEnabled"
-            ]
-        },
-        "types.BillingTermKind": {
-            "type": "string",
-            "enum": [
-                "once",
-                "recurring"
-            ],
-            "x-enum-varnames": [
-                "BillingTermKindOnce",
-                "BillingTermKindRecurring"
-            ]
-        },
-        "types.BillingTermOwnerType": {
-            "type": "string",
-            "enum": [
-                "commitment"
-            ],
-            "x-enum-varnames": [
-                "BillingTermOwnerCommitment"
-            ]
-        },
-        "types.BillingTermSplit": {
-            "type": "string",
-            "enum": [
-                "even",
-                "proportional"
-            ],
-            "x-enum-varnames": [
-                "BillingTermSplitEven",
-                "BillingTermSplitProportional"
-            ]
-        },
-        "types.BillingTermValueType": {
-            "description": "fixed or remainder; percentage is reserved and rejected as not supported yet",
-            "type": "string",
-            "enum": [
-                "fixed",
-                "percentage",
-                "remainder"
-            ],
-            "x-enum-varnames": [
-                "BillingTermValueFixed",
-                "BillingTermValuePercentage",
-                "BillingTermValueRemainder"
-            ]
-        },
-        "types.CancellationFeeType": {
-            "description": "fixed; percentage is reserved and rejected as not supported yet",
-            "type": "string",
-            "enum": [
-                "fixed",
-                "percentage"
-            ],
-            "x-enum-varnames": [
-                "CancellationFeeFixed",
-                "CancellationFeePercentage"
-            ]
-        },
-        "types.CommitmentCollectionMethod": {
-            "type": "string",
-            "enum": [
-                "per_period",
-                "billing_terms"
-            ],
-            "x-enum-varnames": [
-                "CommitmentCollectionPerPeriod",
-                "CommitmentCollectionBillingTerms"
-            ]
-        },
-        "types.CommitmentEarlyTermination": {
-            "type": "string",
-            "enum": [
-                "forfeit",
-                "credit_note",
-                "bill_remaining"
-            ],
-            "x-enum-varnames": [
-                "CommitmentTerminationForfeit",
-                "CommitmentTerminationCreditNote",
-                "CommitmentTerminationBillRemaining"
-            ]
-        },
-        "types.CommitmentMeasurement": {
-            "type": "string",
-            "enum": [
-                "billing_period",
-                "window"
-            ],
-            "x-enum-varnames": [
-                "CommitmentMeasurementBillingPeriod",
-                "CommitmentMeasurementWindow"
-            ]
-        },
-        "types.CommitmentScopeType": {
-            "type": "string",
-            "enum": [
-                "subscription",
-                "group",
-                "meter",
-                "price"
-            ],
-            "x-enum-varnames": [
-                "CommitmentScopeSubscription",
-                "CommitmentScopeGroup",
-                "CommitmentScopeMeter",
-                "CommitmentScopePrice"
-            ]
-        },
-        "types.CommitmentStatus": {
-            "type": "string",
-            "enum": [
-                "active",
-                "ended",
-                "terminated"
-            ],
-            "x-enum-varnames": [
-                "CommitmentStatusActive",
-                "CommitmentStatusEnded",
-                "CommitmentStatusTerminated"
-            ]
-        },
-        "types.ContractStatus": {
-            "type": "string",
-            "enum": [
-                "draft",
-                "active",
-                "ended",
-                "cancelled"
-            ],
-            "x-enum-varnames": [
-                "ContractStatusDraft",
-                "ContractStatusActive",
-                "ContractStatusEnded",
-                "ContractStatusCancelled"
-            ]
-        },
-        "types.EmailDeliveryStatus": {
-            "type": "string",
-            "enum": [
-                "queued",
-                "sent",
-                "delivery_delayed",
-                "delivered",
-                "bounced",
-                "complained",
-                "failed",
-                "suppressed",
-                "skipped"
-            ],
-            "x-enum-varnames": [
-                "EmailDeliveryStatusQueued",
-                "EmailDeliveryStatusSent",
-                "EmailDeliveryStatusDeliveryDelayed",
-                "EmailDeliveryStatusDelivered",
-                "EmailDeliveryStatusBounced",
-                "EmailDeliveryStatusComplained",
-                "EmailDeliveryStatusFailed",
-                "EmailDeliveryStatusSuppressed",
-                "EmailDeliveryStatusSkipped"
-            ]
-        },
-        "types.EmailLogFilter": {
-            "type": "object",
-            "properties": {
-                "customer_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "delivery_statuses": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/types.EmailDeliveryStatus"
-                    }
-                },
-                "end_time": {
-                    "type": "string"
-                },
-                "entity_ids": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "entity_type": {
-                    "$ref": "#/definitions/types.SystemEntityType"
-                },
-                "expand": {
-                    "type": "string"
-                },
-                "limit": {
-                    "type": "integer",
-                    "maximum": 1000,
-                    "minimum": 1
-                },
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0
-                },
-                "order": {
-                    "type": "string",
-                    "enum": [
-                        "asc",
-                        "desc"
-                    ]
-                },
-                "sort": {
-                    "type": "string"
-                },
-                "start_time": {
-                    "type": "string"
-                },
-                "status": {
-                    "$ref": "#/definitions/types.Status"
-                },
-                "triggers": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/types.EmailTrigger"
-                    }
-                }
-            }
-        },
-        "types.EmailProvider": {
-            "type": "string",
-            "enum": [
-                "resend",
-                "local"
-            ],
-            "x-enum-varnames": [
-                "EmailProviderResend",
-                "EmailProviderLocal"
-            ]
-        },
-        "types.EmailTemplateKey": {
-            "type": "string",
-            "enum": [
-                "invoice_finalized"
-            ],
-            "x-enum-varnames": [
-                "EmailTemplateInvoiceFinalized"
-            ]
-        },
-        "types.EmailTrigger": {
-            "type": "string",
-            "enum": [
-                "auto",
-                "manual"
-            ],
-            "x-enum-varnames": [
-                "EmailTriggerAuto",
-                "EmailTriggerManual"
-            ]
-        },
-        "types.EntitlementGrantScopeEntityType": {
-            "type": "string",
-            "enum": [
-                "feature",
-                "subscription",
-                "group"
-            ],
-            "x-enum-varnames": [
-                "EntitlementGrantScopeFeature",
-                "EntitlementGrantScopeSubscription",
-                "EntitlementGrantScopeGroup"
-            ]
-        },
-        "types.ImprovementDirection": {
-            "type": "string",
-            "enum": [
-                "higher",
-                "lower"
-            ],
-            "x-enum-varnames": [
-                "ImprovementHigher",
-                "ImprovementLower"
-            ]
-        },
-        "types.InstalmentBillTrigger": {
-            "type": "string",
-            "enum": [
-                "date",
-                "manual"
-            ],
-            "x-enum-varnames": [
-                "InstalmentBillTriggerDate",
-                "InstalmentBillTriggerManual"
-            ]
-        },
-        "types.InstalmentDelivery": {
-            "type": "string",
-            "enum": [
-                "subscription_invoice",
-                "separate_invoice"
-            ],
-            "x-enum-varnames": [
-                "InstalmentDeliverySubscriptionInvoice",
-                "InstalmentDeliverySeparateInvoice"
-            ]
-        },
-        "types.InstalmentKind": {
-            "type": "string",
-            "enum": [
-                "instalment",
-                "settlement",
-                "cancellation_fee"
-            ],
-            "x-enum-varnames": [
-                "InstalmentKindInstalment",
-                "InstalmentKindSettlement",
-                "InstalmentKindCancellationFee"
-            ]
-        },
-        "types.InstalmentStatus": {
-            "type": "string",
-            "enum": [
-                "scheduled",
-                "invoiced",
-                "cancelled"
-            ],
-            "x-enum-varnames": [
-                "InstalmentStatusScheduled",
-                "InstalmentStatusInvoiced",
-                "InstalmentStatusCancelled"
-            ]
-        },
-        "types.IntegrationCapabilityType": {
-            "type": "string",
-            "enum": [
-                "checkout",
-                "auto_charge",
-                "set_default_method",
-                "payment_link",
-                "payment_method_management",
-                "invoice_sync",
-                "list_payment_methods",
-                "add_payment_method",
-                "delete_payment_method"
-            ],
-            "x-enum-varnames": [
-                "IntegrationCapabilityCheckout",
-                "IntegrationCapabilityAutoCharge",
-                "IntegrationCapabilitySetDefaultMethod",
-                "IntegrationCapabilityPaymentLink",
-                "IntegrationCapabilityPaymentMethodManagement",
-                "IntegrationCapabilityInvoiceSync",
-                "IntegrationCapabilityListPaymentMethods",
-                "IntegrationCapabilityAddPaymentMethod",
-                "IntegrationCapabilityDeletePaymentMethod"
-            ]
-        },
-        "types.InvoiceBillingEntity": {
-            "type": "object",
-            "properties": {
-                "billing_details": {
-                    "$ref": "#/definitions/types.BillingDetails"
-                },
-                "billing_entity_id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
-        "types.InvoicePaymentFailureReason": {
-            "type": "string",
-            "enum": [
-                "payment_method_unavailable",
-                "provider_error",
-                "declined"
-            ],
-            "x-enum-varnames": [
-                "InvoicePaymentFailureReasonPaymentMethodUnavailable",
-                "InvoicePaymentFailureReasonProviderError",
-                "InvoicePaymentFailureReasonDeclined"
-            ]
-        },
-        "types.JournalDirection": {
-            "type": "string",
-            "enum": [
-                "debit",
-                "credit"
-            ],
-            "x-enum-varnames": [
-                "JournalDirectionDebit",
-                "JournalDirectionCredit"
-            ]
-        },
-        "types.JournalEventType": {
-            "type": "string",
-            "enum": [
-                "invoice_finalized",
-                "invoice_voided",
-                "credit_note_finalized",
-                "credit_note_voided",
-                "payment_succeeded",
-                "payment_reversed",
-                "refund_succeeded",
-                "revenue_earned",
-                "revenue_offset"
-            ],
-            "x-enum-varnames": [
-                "JournalEventInvoiceFinalized",
-                "JournalEventInvoiceVoided",
-                "JournalEventCreditNoteFinalized",
-                "JournalEventCreditNoteVoided",
-                "JournalEventPaymentSucceeded",
-                "JournalEventPaymentReversed",
-                "JournalEventRefundSucceeded",
-                "JournalEventRevenueEarned",
-                "JournalEventRevenueOffset"
-            ]
-        },
-        "types.LedgerAccountKey": {
-            "type": "string",
-            "enum": [
-                "cash",
-                "accounts_receivable",
-                "unbilled_receivable",
-                "deferred_revenue",
-                "customer_credit",
-                "tax_payable",
-                "revenue",
-                "contra_revenue"
-            ],
-            "x-enum-varnames": [
-                "LedgerAccountCash",
-                "LedgerAccountReceivable",
-                "LedgerAccountUnbilledReceivable",
-                "LedgerAccountDeferredRevenue",
-                "LedgerAccountCustomerCredit",
-                "LedgerAccountTaxPayable",
-                "LedgerAccountRevenue",
-                "LedgerAccountContraRevenue"
-            ]
-        },
         "types.ListResponse-dto_WalletResponse": {
             "type": "object",
             "properties": {
@@ -40968,239 +41251,6 @@ const docTemplate = `{
             "type": "object",
             "additionalProperties": {
                 "type": "string"
-            }
-        },
-        "types.PerformanceObligationStatus": {
-            "type": "string",
-            "enum": [
-                "draft",
-                "active",
-                "satisfied",
-                "cancelled"
-            ],
-            "x-enum-varnames": [
-                "PerformanceObligationStatusDraft",
-                "PerformanceObligationStatusActive",
-                "PerformanceObligationStatusSatisfied",
-                "PerformanceObligationStatusCancelled"
-            ]
-        },
-        "types.RecognitionMethod": {
-            "type": "string",
-            "enum": [
-                "point_in_time",
-                "straight_line",
-                "as_consumed"
-            ],
-            "x-enum-varnames": [
-                "RecognitionMethodPointInTime",
-                "RecognitionMethodStraightLine",
-                "RecognitionMethodAsConsumed"
-            ]
-        },
-        "types.ReportCategory": {
-            "type": "string",
-            "enum": [
-                "billing",
-                "receivables",
-                "customers",
-                "credits",
-                "usage"
-            ],
-            "x-enum-varnames": [
-                "ReportCategoryBilling",
-                "ReportCategoryReceivables",
-                "ReportCategoryCustomers",
-                "ReportCategoryCredits",
-                "ReportCategoryUsage"
-            ]
-        },
-        "types.ReportKind": {
-            "type": "string",
-            "enum": [
-                "flow",
-                "ratio",
-                "snapshot"
-            ],
-            "x-enum-varnames": [
-                "ReportKindFlow",
-                "ReportKindRatio",
-                "ReportKindSnapshot"
-            ]
-        },
-        "types.ReportValueType": {
-            "type": "string",
-            "enum": [
-                "money",
-                "count",
-                "days"
-            ],
-            "x-enum-varnames": [
-                "ReportValueTypeMoney",
-                "ReportValueTypeCount",
-                "ReportValueTypeDays"
-            ]
-        },
-        "types.RevRecEntityType": {
-            "type": "string",
-            "enum": [
-                "subscription",
-                "subscription_line_item",
-                "invoice",
-                "credit_note",
-                "payment",
-                "refund",
-                "pob"
-            ],
-            "x-enum-varnames": [
-                "RevRecEntityTypeSubscription",
-                "RevRecEntityTypeSubscriptionLineItem",
-                "RevRecEntityTypeInvoice",
-                "RevRecEntityTypeCreditNote",
-                "RevRecEntityTypePayment",
-                "RevRecEntityTypeRefund",
-                "RevRecEntityTypePOB"
-            ]
-        },
-        "types.RevenueReportGroupBy": {
-            "type": "string",
-            "enum": [
-                "customer_id",
-                "contract_id",
-                "pob_id"
-            ],
-            "x-enum-varnames": [
-                "RevenueReportGroupByCustomer",
-                "RevenueReportGroupByContract",
-                "RevenueReportGroupByPOB"
-            ]
-        },
-        "types.SettingsOverride": {
-            "type": "object",
-            "properties": {
-                "subscription_config": {
-                    "$ref": "#/definitions/types.SubscriptionConfigOverride"
-                }
-            }
-        },
-        "types.SubscriptionConfigOverride": {
-            "type": "object",
-            "properties": {
-                "auto_cancellation_enabled": {
-                    "type": "boolean"
-                },
-                "grace_period_days": {
-                    "type": "integer",
-                    "minimum": 0
-                }
-            }
-        },
-        "types.SystemEntityType": {
-            "type": "string",
-            "enum": [
-                "feature",
-                "customer",
-                "plan",
-                "subscription",
-                "invoice",
-                "payment",
-                "credit_note",
-                "refund",
-                "wallet",
-                "entitlement",
-                "checkout_session",
-                "payment_method",
-                "price",
-                "event",
-                "commitment",
-                "billing_term",
-                "billing_instalment"
-            ],
-            "x-enum-varnames": [
-                "SystemEntityTypeFeature",
-                "SystemEntityTypeCustomer",
-                "SystemEntityTypePlan",
-                "SystemEntityTypeSubscription",
-                "SystemEntityTypeInvoice",
-                "SystemEntityTypePayment",
-                "SystemEntityTypeCreditNote",
-                "SystemEntityTypeRefund",
-                "SystemEntityTypeWallet",
-                "SystemEntityTypeEntitlement",
-                "SystemEntityTypeCheckoutSession",
-                "SystemEntityTypePaymentMethod",
-                "SystemEntityTypePrice",
-                "SystemEntityTypeEvent",
-                "SystemEntityTypeCommitment",
-                "SystemEntityTypeBillingTerm",
-                "SystemEntityTypeBillingInstalment"
-            ]
-        },
-        "types.TenantInternalStatus": {
-            "type": "string",
-            "enum": [
-                "trialing",
-                "active",
-                "suspended"
-            ],
-            "x-enum-varnames": [
-                "TenantInternalStatusTrialing",
-                "TenantInternalStatusActive",
-                "TenantInternalStatusSuspended"
-            ]
-        },
-        "types.ZohoPayPalPaymentMethod": {
-            "type": "string",
-            "enum": [
-                "standard",
-                "adaptive"
-            ],
-            "x-enum-varnames": [
-                "ZohoPayPalPaymentMethodStandard",
-                "ZohoPayPalPaymentMethodAdaptive"
-            ]
-        },
-        "types.ZohoPaymentGateway": {
-            "type": "string",
-            "enum": [
-                "paypal",
-                "stripe",
-                "authorize_net",
-                "payflow_pro",
-                "2checkout",
-                "braintree",
-                "razorpay"
-            ],
-            "x-enum-varnames": [
-                "ZohoPaymentGatewayPayPal",
-                "ZohoPaymentGatewayStripe",
-                "ZohoPaymentGatewayAuthorizeNet",
-                "ZohoPaymentGatewayPayflowPro",
-                "ZohoPaymentGateway2Checkout",
-                "ZohoPaymentGatewayBraintree",
-                "ZohoPaymentGatewayRazorpay"
-            ]
-        },
-        "types.ZohoPaymentGatewaySettings": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean"
-                },
-                "gateways": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/types.ZohoPaymentGateway"
-                    }
-                },
-                "paypal_payment_method": {
-                    "description": "Sent as additional_field1 on the PayPal gateway. Required when PayPal is selected.",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/types.ZohoPayPalPaymentMethod"
-                        }
-                    ]
-                }
             }
         },
         "webhookDto.AlertWebhookPayload": {
@@ -42737,10 +42787,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "credit_balance": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "current_balance": {
-                    "type": "number"
+                    "type": "string"
                 },
                 "state": {
                     "type": "string"
